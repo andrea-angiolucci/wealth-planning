@@ -1,5 +1,5 @@
 // Legge il testo OCR di uno scontrino italiano e ne ricava totale, data, esercente, righe e categoria suggerita.
-const AMOUNT = /(\d{1,5}\s?[.,]\s?\d{2})(?!\d)/g;
+const AMOUNT = /(\d{1,5}\s?[.,]\s?\d{2})(?!\d)(?!\s?%)/g;
 const toCents = (s) => Math.round(parseFloat(s.replace(/\s/g, "").replace(",", ".")) * 100);
 const SKIP_ITEM = /(TOTALE|SUBTOTALE|SUB-TOTALE|IVA|RESTO|CONTANT|PAGAMENTO|IMPORTO|SCONTO|ARROTOND|CARTA|BANCOMAT|POS|ELETTRONIC|NON RISCOSSO|DI CUI|PREZZO|IMPONIBILE|CODICE|TEL)/i;
 const CATS = [
@@ -18,7 +18,7 @@ export function parseReceipt(text, categoryNames = []) {
     if (/SUB\s?-?TOTALE|TOTALE\s+IVA|IMPOSTA/i.test(l)) return;
     if (/(TOTALE|DA PAGARE|IMPORTO PAGATO|PAGAMENTO ELETTRONICO|TOTALE EURO)/i.test(l)) {
       const own = [...l.matchAll(AMOUNT)].map((m) => toCents(m[1]));
-      const next = own.length ? [] : [...(lines[i + 1] || "").matchAll(AMOUNT)].map((m) => toCents(m[1]));
+      const next = own.length ? [] : [...(lines[i + 1] || "").matchAll(AMOUNT), ...(lines[i + 2] || "").matchAll(AMOUNT)].map((m) => toCents(m[1]));
       const v = (own.length ? own : next);
       if (v.length) cands.push({ cents: Math.max(...v), strong: /TOTALE\s*(COMPLESSIVO|EURO)?\b|DA PAGARE/i.test(l), i });
     }
@@ -28,7 +28,7 @@ export function parseReceipt(text, categoryNames = []) {
   lines.forEach((l, i) => {
     if (/SUB\s?-?TOTALE|COMPLESS|T[O0]TAL/i.test(l) && !/IVA|IMPOSTA/i.test(l)) {
       const own = [...l.matchAll(AMOUNT)].map((m) => toCents(m[1]));
-      const next = own.length ? [] : [...(lines[i + 1] || "").matchAll(AMOUNT)].map((m) => toCents(m[1]));
+      const next = own.length ? [] : [...(lines[i + 1] || "").matchAll(AMOUNT), ...(lines[i + 2] || "").matchAll(AMOUNT)].map((m) => toCents(m[1]));
       const v = own.length ? own : next;
       if (v.length) soft.push(Math.max(...v));
     }
@@ -83,7 +83,7 @@ export function parseReceipt(text, categoryNames = []) {
   for (const l of firstPass) {
     if (SKIP_ITEM.test(l)) continue;
     const m = l.match(/^(.*?[A-Za-zÀ-ÿ].*?)\s+(-?\d{1,5}[.,]\d{2})\s*[A-Z]?$/);
-    if (m) items.push({ name: m[1].slice(0, 60), cents: toCents(m[2]) });
+    if (m) items.push({ name: m[1].replace(/\s*\d{1,2}\s?[.,]\s?\d{2}\s?%/, "").slice(0, 60), cents: toCents(m[2]) });
   }
   const sum = items.reduce((s, i) => s + i.cents, 0);
   const sumOk = total != null && items.length ? Math.abs(sum - total) <= 2 : null;
