@@ -10,6 +10,7 @@ const CATS = [
   [/(AUTOSTRAD|TELEPASS|TRENITALIA|ITALO|TAXI|PARCHEGGIO|PARCHEGGI|BIGLIETT|ATM |AMT )/i, "Trasporti"],
   [/(CINEMA|TEATRO|MUSEO|LIBRERIA|GIOCATTOL)/i, "Svago"],
 ];
+const occurrences = (text, cents) => (String(text).match(new RegExp("(?:^|[^\\d,.])" + (cents / 100).toFixed(2).replace(".", "\\s?[.,]\\s?") + "(?!\\d)", "g")) || []).length;
 export function parseReceipt(text, categoryNames = []) {
   const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   // totale: righe con TOTALE / DA PAGARE / IMPORTO PAGATO (non SUBTOTALE), con importo sulla riga o sulla successiva
@@ -41,7 +42,7 @@ export function parseReceipt(text, categoryNames = []) {
     const strong = cands.filter((c) => c.strong);
     if (strong.length) total = strong[strong.length - 1].cents; // l'ultimo "totale" e' quello finale
   }
-  if (total == null && soft.length) { total = soft[soft.length - 1]; totalGuess = (freq.get(total) || 0) < 2; } // confermato se compare almeno due volte
+  if (total == null && soft.length) { total = soft[soft.length - 1]; totalGuess = occurrences(text, total) < 2; } // confermato se compare almeno due volte
   if (total == null && repeated.length) { total = Math.max(...repeated); totalGuess = true; }
   if (total == null && cands.length) { total = cands[cands.length - 1].cents; totalGuess = true; }
   // data
