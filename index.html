@@ -84,6 +84,13 @@
   .fold-head { display: flex; justify-content: space-between; align-items: center; width: 100%; background: transparent; color: var(--text); border-radius: 0; padding: 14px; font-size: 16px; font-weight: 600; text-align: left; }
   .fold-head .chev { color: var(--muted); font-size: 14px; }
   .fold-body { padding: 0 14px 14px; }
+  .due { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .due:first-child { border-top: 0; }
+  .due .l { flex: 1; min-width: 0; }
+  .tag { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 12px; font-weight: 600; }
+  .tag.late { background: #4c0519; color: #fecdd3; } .tag.soon { background: #422006; color: #fde68a; } .tag.ok { background: var(--bg); color: var(--muted); }
+  #dueBadge { background: var(--out); color: #4c0519; border-radius: 999px; padding: 0 6px; font-size: 12px; }
+  #dueBadge:empty { display: none; }
   .geo { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .geo .muted { flex: 1; }
   .geo button { flex: none; }
@@ -117,10 +124,12 @@
     <div class="tabs">
       <button id="tabMoves" class="on">Movimenti</button>
       <button id="tabAccounts">Conti</button>
+      <button id="tabDue">Scadenze <span id="dueBadge"></span></button>
     </div>
 
     <!-- MOVIMENTI -->
     <div id="viewMoves">
+      <div id="dueBanner"></div>
       <div class="head">
         <div class="row">
           <button id="prevM" class="ghost small">‹</button>
@@ -164,6 +173,7 @@
 
     <!-- CONTI -->
     <div id="viewAccounts" class="hidden"></div>
+    <div id="viewDue" class="hidden"></div>
 
     <!-- CATEGORIE -->
     <div id="viewSettings" class="hidden"></div>
@@ -173,7 +183,7 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "7";
+const APP_VERSION = "8";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -333,7 +343,9 @@ async function refreshAll() {
   renderSelects(); renderChips(); renderPatrimonioTop();
   if (state.tab === "moves") await loadMonth();
   else if (state.tab === "accounts") renderAccounts();
+  else if (state.tab === "due") await renderDue();
   else renderSettings();
+  if (state.tab !== "due") loadDue();
 }
 function renderPatrimonioTop() {
   const total = state.accounts.reduce((s, a) => s + a.balance, 0);
@@ -367,14 +379,16 @@ function renderChips() {
 /* ---------- SCHEDE ---------- */
 function setTab(t) {
   state.tab = t; state.panel = null;
-  show($("viewMoves"), t === "moves"); show($("viewAccounts"), t === "accounts"); show($("viewSettings"), t === "settings");
+  show($("viewMoves"), t === "moves"); show($("viewAccounts"), t === "accounts"); show($("viewDue"), t === "due"); show($("viewSettings"), t === "settings");
   $("tabMoves").classList.toggle("on", t === "moves");
   $("tabAccounts").classList.toggle("on", t === "accounts");
+  $("tabDue").classList.toggle("on", t === "due");
   $("userBtn").style.color = t === "settings" ? "var(--accent)" : "";
-  if (t === "moves") loadMonth(); else if (t === "accounts") renderAccounts(); else renderSettings();
+  if (t === "moves") loadMonth(); else if (t === "accounts") renderAccounts(); else if (t === "due") renderDue(); else renderSettings();
 }
 $("tabMoves").onclick = () => setTab("moves");
 $("tabAccounts").onclick = () => setTab("accounts");
+$("tabDue").onclick = () => setTab("due");
 $("userBtn").onclick = () => setTab(state.tab === "settings" ? "moves" : "settings");
 
 /* ---------- MOVIMENTI ---------- */
@@ -719,6 +733,92 @@ function appendCats(root) {
   }
 }
 
+/* ---------- SCADENZE ---------- */
+const REC_LABEL = { none: "Una tantum", monthly: "Ogni mese", quarterly: "Ogni 3 mesi", yearly: "Ogni anno" };
+const daysTo = (d) => Math.round((new Date(d + "T00:00:00") - new Date(iso(new Date()) + "T00:00:00")) / 86400000);
+function nextDate(d, rec) {
+  const x = new Date(d + "T00:00:00"), day = x.getDate();
+  x.setDate(1); x.setMonth(x.getMonth() + (rec === "monthly" ? 1 : rec === "quarterly" ? 3 : 12));
+  const last = new Date(x.getFullYear(), x.getMonth() + 1, 0).getDate(); x.setDate(Math.min(day, last));
+  return iso(x);
+}
+function dueInfo(t) {
+  const n = daysTo(t.due_on);
+  if (n < 0) return { cls: "late", txt: `scaduta da ${-n} ${-n === 1 ? "giorno" : "giorni"}` };
+  if (n === 0) return { cls: "late", txt: "scade oggi" };
+  if (n <= t.remind_days) return { cls: "soon", txt: n === 1 ? "scade domani" : `tra ${n} giorni` };
+  return { cls: "ok", txt: `tra ${n} giorni` };
+}
+async function fetchDue() {
+  const r = await sb.from("deadlines").select("id,title,amount_cents,due_on,remind_days,recurrence,done").order("due_on");
+  if (r.error) return readJSON("wp_due", []);
+  writeJSON("wp_due", r.data); return r.data;
+}
+async function loadDue() {
+  const list = (await fetchDue()).filter((t) => !t.done && daysTo(t.due_on) <= t.remind_days);
+  $("dueBadge").textContent = list.length ? String(list.length) : "";
+  const box = $("dueBanner"); box.textContent = "";
+  if (!list.length) return;
+  const card = el("div", { class: "card" }, el("h2", { text: "In scadenza" }));
+  for (const t of list) {
+    const i = dueInfo(t);
+    card.appendChild(el("div", { class: "due" }, el("div", { class: "l" }, el("div", { text: t.title }), el("div", { class: "muted", text: itDate(t.due_on) + (t.amount_cents ? " · " + fmtEur(t.amount_cents) : "") })), el("span", { class: "tag " + i.cls, text: i.txt })));
+  }
+  card.appendChild(el("button", { class: "ghost small", style: "margin-top:8px", text: "Vai alle scadenze", onclick: () => setTab("due") }));
+  box.appendChild(card);
+}
+async function markPaid(t) {
+  if (t.amount_cents && state.accounts.length) {
+    const accId = localStorage.getItem("wp_lastAccount") || state.accounts[0].id;
+    const acc = state.accounts.find((a) => a.id === accId) || state.accounts[0];
+    if (confirm(`Registrare anche la spesa di ${fmtEur(t.amount_cents)} sul conto "${acc.name}"?`)) {
+      const { error } = await sb.from("transactions").insert({ id: crypto.randomUUID(), account_id: acc.id, occurred_on: iso(new Date()), amount_cents: -Math.abs(Number(t.amount_cents)), merchant: t.title, source: "manual", kind: "normal" });
+      if (error) return alert("Spesa non registrata: " + error.message);
+    }
+  }
+  const upd = t.recurrence === "none" ? { done: true } : { due_on: nextDate(t.due_on, t.recurrence) };
+  const { error } = await sb.from("deadlines").update(upd).eq("id", t.id);
+  if (error) return alert("Non aggiornata: " + error.message);
+  await refreshAll();
+}
+async function renderDue() {
+  const root = $("viewDue"); root.textContent = "";
+  const all = await fetchDue();
+  const open = all.filter((t) => !t.done), done = all.filter((t) => t.done);
+  if (state.dueForm === undefined) state.dueForm = false;
+  const card = el("div", { class: "card" }, el("h2", { text: "Scadenze" }));
+  if (!open.length) card.appendChild(el("p", { class: "muted", text: "Nessuna scadenza. Aggiungine una: ti avviso prima del giorno indicato." }));
+  for (const t of open) {
+    const i = dueInfo(t);
+    card.appendChild(el("div", { class: "due" },
+      el("div", { class: "l" }, el("div", { text: t.title }), el("div", { class: "muted", text: itDate(t.due_on) + (t.amount_cents ? " · " + fmtEur(t.amount_cents) : "") + " · " + REC_LABEL[t.recurrence] + " · avviso " + t.remind_days + " gg prima" }),
+        el("span", { class: "tag " + i.cls, text: i.txt })),
+      el("button", { class: "small", text: "Pagata", onclick: () => markPaid(t) }),
+      el("button", { class: "x", "aria-label": "Elimina", text: "×", onclick: async () => { if (!confirm(`Eliminare "${t.title}"?`)) return; await sb.from("deadlines").delete().eq("id", t.id); await refreshAll(); } })));
+  }
+  card.appendChild(el("button", { style: "width:100%;margin-top:10px", class: state.dueForm ? "ghost" : "", text: state.dueForm ? "Annulla" : "+ Nuova scadenza", onclick: () => { state.dueForm = !state.dueForm; renderDue(); } }));
+  if (state.dueForm) card.appendChild(dueForm());
+  root.appendChild(card);
+  if (done.length) root.appendChild(collapsible("duedone", `Pagate (${done.length})`, ...done.map((t) => el("div", { class: "tx" }, el("div", { class: "l t", text: t.title + " · " + itDate(t.due_on) }),
+    el("button", { class: "x", text: "×", onclick: async () => { await sb.from("deadlines").delete().eq("id", t.id); await refreshAll(); } })))));
+  loadDue();
+}
+function dueForm() {
+  const title = el("input", { type: "text", placeholder: "es. Assicurazione auto, F24, rata", autocomplete: "off" });
+  const amt = moneyInput();
+  const date = el("input", { type: "date", value: iso(new Date()) });
+  const rem = el("select"); for (const n of [0, 1, 3, 7, 14, 30]) rem.appendChild(el("option", { value: n, text: n === 0 ? "Solo il giorno stesso" : n + (n === 1 ? " giorno prima" : " giorni prima"), selected: n === 7 }));
+  const rec = el("select"); for (const [k, v] of Object.entries(REC_LABEL)) rec.appendChild(el("option", { value: k, text: v }));
+  const box = el("div");
+  return el("div", { class: "panel" }, box, field("Cosa scade", title), field("Importo (facoltativo)", amt.wrap), field("Data di scadenza", date), field("Avvisami", rem), field("Si ripete", rec),
+    el("button", { style: "width:100%", text: "Aggiungi scadenza", onclick: async () => {
+      if (!title.value.trim()) return msg(box, "Scrivi cosa scade.");
+      const { error } = await sb.from("deadlines").insert({ title: title.value.trim(), amount_cents: amt.abs() || null, due_on: date.value, remind_days: Number(rem.value), recurrence: rec.value });
+      if (error) return msg(box, "Non salvata: " + error.message);
+      state.dueForm = false; await refreshAll();
+    } }));
+}
+
 /* ---------- AVVIO ---------- */
 function hasStoredSession() { return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k)); }
 async function boot() {
@@ -733,6 +833,7 @@ async function boot() {
   setKind("expense"); renderGeo();
   if (await loadRefs()) { renderSelects(); renderChips(); renderPatrimonioTop(); }
   setTab("moves");
+  loadDue();
 }
 boot();
 
