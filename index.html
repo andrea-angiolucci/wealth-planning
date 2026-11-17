@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "16";
+const APP_VERSION = "17";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -529,7 +529,7 @@ async function ocrText(file, onProgress) {
     out.push(data.text);
     if (/(TOTALE|COMPLESS)/i.test(data.text) && /\d{1,2}[^\d\n]{0,2}\d{1,2}[^\d\n]{0,2}20[2-3]\d/.test(data.text)) break;
   }
-  return out.join("\n");
+  return out.join("\n=====\n");
 }
 function jpegBlob(file, maxW, q) {
   return createImageBitmap(file).then((bmp) => {
@@ -564,8 +564,7 @@ $("scanFile").onchange = async () => {
     const warn = [];
     if (!data.total_cents) warn.push("Totale non trovato: scrivilo tu.");
     else if (data.total_guess) warn.push("Totale dedotto, non letto con certezza: controllalo.");
-    if (data.items_sum_cents != null && data.total_cents != null && data.items_sum_cents > data.total_cents + 2) warn.push(`Le righe sommano ${fmtEur(data.items_sum_cents)}, più del totale letto ${fmtEur(data.total_cents)}: controlla l'importo.`);
-    if (data.low_confidence) warn.push("Lettura incerta: controlla importo e data.");
+        if (data.low_confidence) warn.push("Lettura incerta: controlla importo e data.");
     if (data.notes) warn.push(data.notes);
     box.appendChild(el("div", { class: "msg " + (warn.length ? "err" : "ok") }, warn.length ? warn.join(" ") : "Letto: controlla importo, data e categoria, poi Salva."));
     if (data.items && data.items.length) {

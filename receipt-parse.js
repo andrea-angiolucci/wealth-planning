@@ -66,7 +66,8 @@ export function parseReceipt(text, categoryNames = []) {
   }
   // righe
   const items = [];
-  for (const l of lines) {
+  const firstPass = String(text || "").split("\n=====\n")[0].split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (const l of firstPass) {
     if (SKIP_ITEM.test(l)) continue;
     const m = l.match(/^(.*?[A-Za-zÀ-ÿ].*?)\s+(-?\d{1,5}[.,]\d{2})\s*[A-Z]?$/);
     if (m) items.push({ name: m[1].slice(0, 60), cents: toCents(m[2]) });
