@@ -26,7 +26,7 @@ export function parseReceipt(text, categoryNames = []) {
   // altri indizi quando "TOTALE" e' illeggibile: SUBTOTALE, "TOTALE COMPLESS...", importo che si ripete
   const soft = [];
   lines.forEach((l, i) => {
-    if (/SUB\s?-?TOTALE|COMPLESS|T[O0]TAL/i.test(l) && !/IVA|IMPOSTA/i.test(l)) {
+    if (/SUB\s?-?TOTALE|COMPLESS|PLESSIV|T[O0]TAL/i.test(l) && !/IVA|IMPOSTA/i.test(l)) {
       const own = [...l.matchAll(AMOUNT)].map((m) => toCents(m[1]));
       const next = own.length ? [] : [...(lines[i + 1] || "").matchAll(AMOUNT), ...(lines[i + 2] || "").matchAll(AMOUNT)].map((m) => toCents(m[1]));
       const v = own.length ? own : next;
@@ -41,7 +41,7 @@ export function parseReceipt(text, categoryNames = []) {
     const strong = cands.filter((c) => c.strong);
     if (strong.length) total = strong[strong.length - 1].cents; // l'ultimo "totale" e' quello finale
   }
-  if (total == null && soft.length) { total = soft[soft.length - 1]; totalGuess = true; }
+  if (total == null && soft.length) { total = soft[soft.length - 1]; totalGuess = (freq.get(total) || 0) < 2; } // confermato se compare almeno due volte
   if (total == null && repeated.length) { total = Math.max(...repeated); totalGuess = true; }
   if (total == null && cands.length) { total = cands[cands.length - 1].cents; totalGuess = true; }
   // data
