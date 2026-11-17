@@ -39,7 +39,7 @@
   .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; }
   .head .row { flex: none; }
   .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
-  .tabs button { flex: 1; background: var(--card); color: var(--muted); border: 1px solid var(--line); padding: 10px 6px; font-size: 14px; }
+  .tabs button { flex: 1; background: var(--card); color: var(--muted); border: 1px solid var(--line); padding: 10px 2px; font-size: 13px; }
   .tabs button.on { background: var(--accent); color: #082f49; border-color: var(--accent); }
   .toggle { display: flex; gap: 6px; margin-bottom: 10px; }
   .toggle button { flex: 1; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
@@ -91,6 +91,13 @@
   .tag.late { background: #4c0519; color: #fecdd3; } .tag.soon { background: #422006; color: #fde68a; } .tag.ok { background: var(--bg); color: var(--muted); }
   #dueBadge { background: var(--out); color: #4c0519; border-radius: 999px; padding: 0 6px; font-size: 12px; }
   #dueBadge:empty { display: none; }
+  .bar { height: 8px; background: var(--bg); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  .bar.warn > i { background: #fbbf24; } .bar.over > i { background: var(--out); }
+  .bgt { padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+  .bgt:first-child { border-top: 0; }
+  .bgt .top { display: flex; justify-content: space-between; gap: 8px; }
+  svg.chart { width: 100%; height: 140px; display: block; }
   .geo { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .geo .muted { flex: 1; }
   .geo button { flex: none; }
@@ -123,6 +130,7 @@
     <div id="offline" class="banner hidden"></div>
     <div class="tabs">
       <button id="tabMoves" class="on">Movimenti</button>
+      <button id="tabBudget">Budget</button>
       <button id="tabAccounts">Conti</button>
       <button id="tabDue">Scadenze <span id="dueBadge"></span></button>
     </div>
@@ -180,6 +188,7 @@
     <!-- CONTI -->
     <div id="viewAccounts" class="hidden"></div>
     <div id="viewDue" class="hidden"></div>
+    <div id="viewBudget" class="hidden"></div>
 
     <!-- CATEGORIE -->
     <div id="viewSettings" class="hidden"></div>
@@ -190,7 +199,7 @@
 <script type="module">
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
-const APP_VERSION = "11";
+const APP_VERSION = "12";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -351,6 +360,7 @@ async function refreshAll() {
   if (state.tab === "moves") await loadMonth();
   else if (state.tab === "accounts") renderAccounts();
   else if (state.tab === "due") await renderDue();
+  else if (state.tab === "budget") await renderBudget();
   else renderSettings();
   if (state.tab !== "due") loadDue();
 }
@@ -386,16 +396,18 @@ function renderChips() {
 /* ---------- SCHEDE ---------- */
 function setTab(t) {
   state.tab = t; state.panel = null;
-  show($("viewMoves"), t === "moves"); show($("viewAccounts"), t === "accounts"); show($("viewDue"), t === "due"); show($("viewSettings"), t === "settings");
+  show($("viewMoves"), t === "moves"); show($("viewAccounts"), t === "accounts"); show($("viewDue"), t === "due"); show($("viewBudget"), t === "budget"); show($("viewSettings"), t === "settings");
   $("tabMoves").classList.toggle("on", t === "moves");
   $("tabAccounts").classList.toggle("on", t === "accounts");
   $("tabDue").classList.toggle("on", t === "due");
+  $("tabBudget").classList.toggle("on", t === "budget");
   $("userBtn").style.color = t === "settings" ? "var(--accent)" : "";
-  if (t === "moves") loadMonth(); else if (t === "accounts") renderAccounts(); else if (t === "due") renderDue(); else renderSettings();
+  if (t === "moves") loadMonth(); else if (t === "accounts") renderAccounts(); else if (t === "due") renderDue(); else if (t === "budget") renderBudget(); else renderSettings();
 }
 $("tabMoves").onclick = () => setTab("moves");
 $("tabAccounts").onclick = () => setTab("accounts");
 $("tabDue").onclick = () => setTab("due");
+$("tabBudget").onclick = () => setTab("budget");
 $("userBtn").onclick = () => setTab(state.tab === "settings" ? "moves" : "settings");
 
 /* ---------- MOVIMENTI ---------- */
@@ -831,6 +843,87 @@ function appendCats(root) {
         await refreshAll();
       } })));
     root.appendChild(collapsible("cat-" + kind, title, card));
+  }
+}
+
+/* ---------- BUDGET E DASHBOARD ---------- */
+function svgLine(points) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg"); svg.setAttribute("viewBox", "0 0 300 120"); svg.setAttribute("class", "chart"); svg.setAttribute("preserveAspectRatio", "none");
+  const vals = points.map((p) => p.v), min = Math.min(0, ...vals), max = Math.max(1, ...vals), span = max - min || 1;
+  const X = (i) => 8 + (i * 284) / Math.max(1, points.length - 1), Y = (v) => 110 - ((v - min) / span) * 100;
+  const zero = document.createElementNS(NS, "line"); zero.setAttribute("x1", 8); zero.setAttribute("x2", 292); zero.setAttribute("y1", Y(0)); zero.setAttribute("y2", Y(0)); zero.setAttribute("stroke", "#334155"); zero.setAttribute("stroke-dasharray", "3 3"); svg.appendChild(zero);
+  const pl = document.createElementNS(NS, "polyline"); pl.setAttribute("fill", "none"); pl.setAttribute("stroke", "#38bdf8"); pl.setAttribute("stroke-width", "2.5"); pl.setAttribute("stroke-linejoin", "round");
+  pl.setAttribute("points", points.map((p, i) => X(i) + "," + Y(p.v)).join(" ")); svg.appendChild(pl);
+  points.forEach((p, i) => { const c = document.createElementNS(NS, "circle"); c.setAttribute("cx", X(i)); c.setAttribute("cy", Y(p.v)); c.setAttribute("r", 3); c.setAttribute("fill", "#38bdf8"); svg.appendChild(c); });
+  return svg;
+}
+async function renderBudget() {
+  const root = $("viewBudget"); root.textContent = "";
+  const from = iso(state.month), to = iso(new Date(state.month.getFullYear(), state.month.getMonth() + 1, 1));
+  const [tx, bg, nw] = await Promise.all([
+    sb.from("transactions").select("amount_cents,category_id,kind").gte("occurred_on", from).lt("occurred_on", to).eq("kind", "normal").limit(5000),
+    sb.from("budgets").select("category_id,month,amount_cents").lte("month", from).order("month", { ascending: false }),
+    sb.rpc("net_worth_series", { p_months: 12 }),
+  ]);
+  if (tx.error || bg.error) return msg(root.appendChild(el("div")), "Errore nel caricamento: " + (tx.error || bg.error).message);
+  const spent = {}; let out = 0, inn = 0;
+  for (const t of tx.data) { const v = Number(t.amount_cents); if (v < 0) { out += -v; spent[t.category_id || "none"] = (spent[t.category_id || "none"] || 0) - v; } else inn += v; }
+  const cap = {}; for (const b of bg.data) if (cap[b.category_id] === undefined) cap[b.category_id] = Number(b.amount_cents); // l'ultimo tetto valido fino a questo mese
+  const cats = state.categories.filter((c) => c.kind === "expense");
+  const totCap = cats.reduce((s, c) => s + (cap[c.id] || 0), 0);
+
+  root.appendChild(el("div", { class: "head" }, el("div", { class: "row" },
+    el("button", { class: "ghost small", text: "‹", onclick: () => { state.month = new Date(state.month.getFullYear(), state.month.getMonth() - 1, 1); renderBudget(); } }),
+    el("h2", { text: state.month.toLocaleDateString("it-IT", { month: "long", year: "numeric" }), style: "min-width:150px;text-align:center;margin:0" }),
+    el("button", { class: "ghost small", text: "›", onclick: () => { state.month = new Date(state.month.getFullYear(), state.month.getMonth() + 1, 1); renderBudget(); } }))));
+
+  const net = inn - out;
+  root.appendChild(el("div", { class: "card sums" },
+    el("div", {}, el("div", { class: "muted", text: "Uscite" }), el("div", { class: "v out", text: fmtEur(out) })),
+    el("div", {}, el("div", { class: "muted", text: "Entrate" }), el("div", { class: "v in", text: fmtEur(inn) })),
+    el("div", {}, el("div", { class: "muted", text: "Risparmio" }), el("div", { class: "v " + (net < 0 ? "out" : "in"), text: fmtEur(net) }))));
+
+  const card = el("div", { class: "card" }, el("h2", { text: "Budget per categoria" }));
+  if (totCap) {
+    const pct = Math.min(100, Math.round((out / totCap) * 100));
+    card.appendChild(el("div", { style: "margin-bottom:10px" }, el("div", { class: "top", style: "display:flex;justify-content:space-between" }, el("span", { text: "Totale" }), el("span", { class: out > totCap ? "out" : "muted", text: `${fmtEur(out)} di ${fmtEur(totCap)}` })), el("div", { class: "bar" + (out > totCap ? " over" : pct >= 80 ? " warn" : "") }, el("i", { style: `width:${pct}%` }))));
+  } else card.appendChild(el("p", { class: "muted", text: "Tocca una categoria per fissare il tetto mensile. Il tetto vale dal mese scelto in poi, finché non lo cambi." }));
+  const rows = [...cats.map((c) => ({ id: c.id, name: c.name })), { id: "none", name: "Senza categoria" }].filter((c) => c.id !== "none" || spent.none);
+  for (const c of rows) {
+    const sp = spent[c.id] || 0, cp = c.id === "none" ? 0 : cap[c.id] || 0;
+    const pct = cp ? Math.min(100, Math.round((sp / cp) * 100)) : 0;
+    const open = state.bEdit === c.id;
+    const row = el("div", { class: "bgt", onclick: c.id === "none" ? null : () => { state.bEdit = open ? null : c.id; renderBudget(); } },
+      el("div", { class: "top" }, el("span", { text: c.name }),
+        el("span", { class: cp && sp > cp ? "out" : "muted", text: cp ? `${fmtEur(sp)} / ${fmtEur(cp)}` : fmtEur(sp) })),
+      cp ? el("div", { class: "bar" + (sp > cp ? " over" : pct >= 80 ? " warn" : "") }, el("i", { style: `width:${pct}%` })) : null,
+      cp ? el("div", { class: "muted", style: "font-size:13px;margin-top:4px", text: sp > cp ? `Sforato di ${fmtEur(sp - cp)}` : `Restano ${fmtEur(cp - sp)}` }) : null);
+    card.appendChild(row);
+    if (open) {
+      const m = moneyInput(); m.set(cp);
+      const box = el("div");
+      card.appendChild(el("div", { class: "panel", onclick: (e) => e.stopPropagation() }, box, field(`Tetto mensile per ${c.name} dal mese scelto`, m.wrap),
+        el("div", { class: "row" },
+          el("button", { text: "Salva tetto", onclick: async () => {
+            const r = m.abs() > 0
+              ? await sb.from("budgets").upsert({ category_id: c.id, month: from, amount_cents: m.abs() }, { onConflict: "category_id,month" })
+              : await sb.from("budgets").upsert({ category_id: c.id, month: from, amount_cents: 0 }, { onConflict: "category_id,month" });
+            if (r.error) return msg(box, "Non salvato: " + r.error.message);
+            state.bEdit = null; renderBudget();
+          } }),
+          el("button", { class: "ghost", text: "Annulla", onclick: () => { state.bEdit = null; renderBudget(); } }))));
+    }
+  }
+  root.appendChild(card);
+
+  if (!nw.error && nw.data && nw.data.length) {
+    const pts = nw.data.map((r) => ({ v: Number(r.total_cents) / 100, d: r.month_end }));
+    const first = pts[0], last = pts[pts.length - 1];
+    const ch = el("div", { class: "card" }, el("h2", { text: "Patrimonio nel tempo" }), svgLine(pts),
+      el("div", { class: "row muted", style: "font-size:13px" }, el("span", { text: new Date(first.d + "T00:00:00").toLocaleDateString("it-IT", { month: "short", year: "2-digit" }) }),
+        el("span", { style: "text-align:right", text: new Date(last.d + "T00:00:00").toLocaleDateString("it-IT", { month: "short", year: "2-digit" }) + ": " + eur.format(last.v) })));
+    root.appendChild(ch);
   }
 }
 
