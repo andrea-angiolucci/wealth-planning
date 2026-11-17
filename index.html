@@ -189,7 +189,8 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "10";
+import { parseReceipt } from "./receipt-parse.js";
+const APP_VERSION = "11";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -480,7 +481,33 @@ $("geoBtn").onclick = () => {
   );
 };
 
-/* scansione scontrino */
+/* scansione scontrino: lettura gratuita sul telefono (OCR), nessun costo e nessun dato che esce */
+let ocrWorker = null, ocrProgress = () => {};
+async function ocrText(file, onProgress) {
+  ocrProgress = onProgress;
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(2, 2000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  const ctx = c.getContext("2d"); ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  const im = ctx.getImageData(0, 0, c.width, c.height), px = im.data, hist = new Uint32Array(256);
+  for (let i = 0; i < px.length; i += 4) { const g = (px[i] * 0.3 + px[i + 1] * 0.59 + px[i + 2] * 0.11) | 0; px[i] = g; hist[g]++; }
+  const n = px.length / 4; let acc = 0, lo = 0, hi = 255;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > n * 0.02) { lo = v; break; } }
+  acc = 0; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > n * 0.02) { hi = v; break; } }
+  const span = Math.max(40, hi - lo);
+  for (let i = 0; i < px.length; i += 4) { const v = Math.max(0, Math.min(255, ((px[i] - lo) * 255) / span)); px[i] = px[i + 1] = px[i + 2] = v; }
+  ctx.putImageData(im, 0, 0);
+  if (!ocrWorker) {
+    const { createWorker } = await import("./ocr/tesseract.esm.min.js");
+    ocrWorker = await createWorker("ita", 1, {
+      workerPath: new URL("./ocr/worker.min.js", location.href).href, corePath: new URL("./ocr/core", location.href).href,
+      langPath: new URL("./ocr/lang", location.href).href, gzip: true, workerBlobURL: false,
+      logger: (m) => { if (m.status === "recognizing text") ocrProgress(m.progress); },
+    });
+  }
+  const { data } = await ocrWorker.recognize(c);
+  return data.text;
+}
 function jpegBlob(file, maxW, q) {
   return createImageBitmap(file).then((bmp) => {
     const k = Math.min(1, maxW / Math.max(bmp.width, bmp.height));
@@ -491,7 +518,6 @@ function jpegBlob(file, maxW, q) {
 }
 const blobToB64 = (b) => new Promise((res) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(",")[1]); f.readAsDataURL(b); });
 $("scanBtn").onclick = () => {
-  if (!navigator.onLine) return msg("addMsg", "Per leggere lo scontrino serve la connessione. Puoi inserire la spesa a mano.");
   $("scanFile").value = ""; $("scanFile").click();
 };
 $("scanFile").onchange = async () => {
@@ -499,13 +525,11 @@ $("scanFile").onchange = async () => {
   msg("addMsg", ""); msg("scanOut", ""); $("scanInfo").textContent = "Leggo lo scontrino..."; $("scanBtn").disabled = true;
   try {
     const blob = await jpegBlob(f, 1600, 0.8);
-    const image = await blobToB64(blob);
     const cats = state.categories.filter((c) => c.kind === "expense").map((c) => c.name);
-    const { data, error } = await sb.functions.invoke("read-receipt", { body: { image, categories: cats } });
-    if (error || !data || data.error) {
-      const code = data && data.error;
-      throw new Error(code === "missing_key" ? "la lettura automatica non è ancora attiva" : code === "unreadable" ? "non sono riuscito a leggere la foto, riprova con più luce" : (error && error.message) || "errore");
-    }
+    const text = await ocrText(f, (p) => { $("scanInfo").textContent = "Leggo lo scontrino... " + Math.round(p * 100) + "%"; });
+    const data = parseReceipt(text, cats);
+    data.low_confidence = data.total_cents == null || data.date == null;
+    data.notes = "";
     state.receipt = blob;
     setKind("expense");
     if (data.total_cents) amountField.set(data.total_cents);
@@ -522,7 +546,7 @@ $("scanFile").onchange = async () => {
     box.appendChild(el("div", { class: "msg " + (warn.length ? "err" : "ok") }, warn.length ? warn.join(" ") : "Letto: controlla importo, data e categoria, poi Salva."));
     if (data.items && data.items.length) {
       const d = el("details", { style: "margin-bottom:10px" }, el("summary", { class: "muted", text: `Righe lette (${data.items.length})` }),
-        ...data.items.map((i) => el("div", { class: "muted", text: i.name + " · " + fmtEur(Math.round(i.line_total * 100)) })));
+        ...data.items.map((i) => el("div", { class: "muted", text: i.name + " · " + fmtEur(i.cents) })));
       box.appendChild(d);
     }
     $("scanInfo").textContent = "Scontrino allegato";
