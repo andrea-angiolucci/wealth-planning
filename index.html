@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "20";
+const APP_VERSION = "21";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -575,7 +575,12 @@ $("scanFile").onchange = async () => {
         ...data.amounts.map((c) => el("button", { class: "ghost", type: "button", text: fmtEur(c), onclick: () => amountField.set(c) }))));
     }
     box.appendChild(el("details", { style: "margin-bottom:10px" }, el("summary", { class: "muted", text: "Testo letto (per diagnosi)" }),
-      el("pre", { style: "white-space:pre-wrap;font-size:11px;max-height:200px;overflow:auto", text: text })));
+      el("button", { class: "ghost", type: "button", text: "Copia testo", style: "margin:6px 0", onclick: async (ev) => {
+        const b = ev.target;
+        try { await navigator.clipboard.writeText(text); b.textContent = "Copiato"; }
+        catch (e) { const ta = el("textarea", { style: "position:fixed;opacity:0" }); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand("copy"); b.textContent = "Copiato"; } catch (e2) { b.textContent = "Copia non riuscita"; } ta.remove(); }
+      } }),
+      el("pre", { style: "white-space:pre-wrap;font-size:11px;max-height:120px;overflow:auto", text: text })));
     if (data.items && data.items.length) {
       const d = el("details", { style: "margin-bottom:10px" }, el("summary", { class: "muted", text: `Righe lette (${data.items.length})` }),
         ...data.items.map((i) => el("div", { class: "muted", text: i.name + " · " + fmtEur(i.cents) })));
