@@ -103,13 +103,13 @@
   <section id="app" class="hidden">
     <div class="head">
       <h1>Wealth</h1>
-      <div id="patrimonioTop" class="muted"></div>
+      <div id="patrimonioTop" class="muted" style="flex:1;text-align:right"></div>
+      <button id="userBtn" class="ghost small" aria-label="Menu utente" style="flex:none;padding:6px 8px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></button>
     </div>
     <div id="offline" class="banner hidden"></div>
     <div class="tabs">
       <button id="tabMoves" class="on">Movimenti</button>
       <button id="tabAccounts">Conti</button>
-      <button id="tabSettings">Impostazioni</button>
     </div>
 
     <!-- MOVIMENTI -->
@@ -166,7 +166,7 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "3";
+const APP_VERSION = "4";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -363,12 +363,12 @@ function setTab(t) {
   show($("viewMoves"), t === "moves"); show($("viewAccounts"), t === "accounts"); show($("viewSettings"), t === "settings");
   $("tabMoves").classList.toggle("on", t === "moves");
   $("tabAccounts").classList.toggle("on", t === "accounts");
-  $("tabSettings").classList.toggle("on", t === "settings");
+  $("userBtn").style.color = t === "settings" ? "var(--accent)" : "";
   if (t === "moves") loadMonth(); else if (t === "accounts") renderAccounts(); else renderSettings();
 }
 $("tabMoves").onclick = () => setTab("moves");
 $("tabAccounts").onclick = () => setTab("accounts");
-$("tabSettings").onclick = () => setTab("settings");
+$("userBtn").onclick = () => setTab(state.tab === "settings" ? "moves" : "settings");
 
 /* ---------- MOVIMENTI ---------- */
 const amountField = moneyInput({ big: true });
@@ -616,6 +616,7 @@ function newAccountCard() {
 /* ---------- CATEGORIE ---------- */
 function renderSettings() {
   const root = $("viewSettings"); root.textContent = "";
+  root.appendChild(el("div", { class: "head" }, el("h2", { text: "Impostazioni", style: "margin:0" }), el("button", { class: "ghost small", text: "Chiudi", onclick: () => setTab("moves") })));
   root.appendChild(newAccountCard());
   appendCats(root);
   const upd = el("div");
