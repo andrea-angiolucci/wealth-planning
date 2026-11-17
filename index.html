@@ -183,7 +183,7 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "8";
+const APP_VERSION = "9";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -531,7 +531,7 @@ function renderAccounts() {
       el("div", { class: "muted", text: `Saldo iniziale ${fmtEur(a.opening_balance_cents)} al ${itDate(a.opening_date)}. ${recTxt}.` }),
       el("div", { class: "actions" },
         el("button", { class: "ghost small", text: "Modifica", onclick: () => { state.panel = open === "edit" ? null : { id: a.id, kind: "edit" }; renderAccounts(); } }),
-        el("button", { class: "ghost small", text: "Quadra con estratto", onclick: () => { state.panel = open === "rec" ? null : { id: a.id, kind: "rec" }; renderAccounts(); } }),
+        el("button", { class: "ghost small", text: "Allinea al saldo reale", onclick: () => { state.panel = open === "rec" ? null : { id: a.id, kind: "rec" }; renderAccounts(); } }),
       ),
       open === "edit" ? editPanel(a) : null,
       open === "rec" ? recPanel(a) : null,
@@ -574,7 +574,7 @@ function recPanel(a) {
   const stmt = moneyInput({ withSign: true, signLabel: "Saldo negativo" });
   const out = el("div");
   return el("div", { class: "panel" },
-    el("p", { class: "muted", text: "Inserisci il saldo finale che risulta sull'estratto conto alla data indicata." }),
+    el("p", { class: "muted", text: "Inserisci il saldo che vedi oggi nella tua banca (o quello dell'estratto conto alla data indicata). Se è diverso dall'app, ti propongo di allinearlo." }),
     field("Data dell'estratto", date), field("Saldo dell'estratto", stmt.wrap), out,
     el("button", { style: "width:100%", text: "Controlla", onclick: async () => {
       msg(out, "");
@@ -588,7 +588,7 @@ function recPanel(a) {
         `Saldo nell'app ${fmtEur(appBal)}, estratto ${fmtEur(st)}. ` + (diff === 0 ? "Quadra." : `Differenza ${fmtEur(diff)}.`)));
       if (diff !== 0) {
         out.appendChild(el("p", { class: "muted", text: "Controlla se manca qualche movimento. Se non lo trovi, puoi registrare una rettifica che porta il saldo dell'app a quello dell'estratto." }));
-        out.appendChild(el("button", { class: "ghost", style: "width:100%", text: `Crea rettifica di ${fmtEur(diff)}`, onclick: async () => {
+        out.appendChild(el("button", { style: "width:100%", text: `Allinea il saldo (registra ${fmtEur(diff)} non annotati)`, onclick: async () => {
           const r = await sb.from("transactions").insert({ account_id: a.id, occurred_on: date.value, amount_cents: diff, merchant: "Rettifica quadratura", kind: "adjustment", source: "manual" });
           if (r.error) return msg(out, "Rettifica non riuscita: " + r.error.message);
           await sb.from("reconciliations").update({ diff_cents: 0 }).eq("account_id", a.id).eq("as_of", date.value);
@@ -758,6 +758,8 @@ async function loadDue() {
   const list = (await fetchDue()).filter((t) => !t.done && daysTo(t.due_on) <= t.remind_days);
   $("dueBadge").textContent = list.length ? String(list.length) : "";
   const box = $("dueBanner"); box.textContent = "";
+  const stale = state.accounts.filter((a) => { const r = state.recs[a.id]; return !r || daysTo(r.as_of) < -7; });
+  if (stale.length) box.appendChild(el("div", { class: "banner", style: "cursor:pointer", onclick: () => setTab("accounts"), text: `Saldi da allineare con la banca: ${stale.length} ${stale.length === 1 ? "conto" : "conti"} (ultimo controllo oltre 7 giorni fa).` }));
   if (!list.length) return;
   const card = el("div", { class: "card" }, el("h2", { text: "In scadenza" }));
   for (const t of list) {

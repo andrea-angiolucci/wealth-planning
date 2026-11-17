@@ -1,5 +1,5 @@
 // Cambia VERSION ad ogni rilascio: il telefono scarica la nuova versione e ricarica da solo.
-const VERSION = "8";
+const VERSION = "9";
 const CACHE = "wealth-shell-v" + VERSION;
 const SHELL = ["./", "index.html", "supabase.js", "manifest.json", "icon-180.png", "icon-192.png", "icon-512.png", "cards/amex.jpg", "cards/revolut.jpg", "cards/buddy.jpg", "cards/intesa-visa.jpg", "cards/intesa-mc.jpg"];
 
