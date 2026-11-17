@@ -1,6 +1,6 @@
 // Service worker minimale: la pagina viene sempre cercata prima in rete (cosi' gli aggiornamenti arrivano subito),
 // la cache serve solo se sei offline. Le chiamate a Supabase non vengono mai messe in cache.
-const CACHE = "wealth-shell-v1";
+const CACHE = "wealth-shell-v2";
 const SHELL = ["./", "index.html", "manifest.json", "icon-180.png", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
