@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "17";
+const APP_VERSION = "18";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -567,6 +567,13 @@ $("scanFile").onchange = async () => {
         if (data.low_confidence) warn.push("Lettura incerta: controlla importo e data.");
     if (data.notes) warn.push(data.notes);
     box.appendChild(el("div", { class: "msg " + (warn.length ? "err" : "ok") }, warn.length ? warn.join(" ") : "Letto: controlla importo, data e categoria, poi Salva."));
+    if (data.amounts && data.amounts.length) {
+      box.appendChild(el("div", { class: "muted", style: "margin:6px 0 4px", text: "Importi letti: tocca quello giusto" }));
+      box.appendChild(el("div", { style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px" },
+        ...data.amounts.map((c) => el("button", { class: "ghost", type: "button", text: fmtEur(c), onclick: () => amountField.set(c) }))));
+    }
+    box.appendChild(el("details", { style: "margin-bottom:10px" }, el("summary", { class: "muted", text: "Testo letto (per diagnosi)" }),
+      el("pre", { style: "white-space:pre-wrap;font-size:11px;max-height:200px;overflow:auto", text: text })));
     if (data.items && data.items.length) {
       const d = el("details", { style: "margin-bottom:10px" }, el("summary", { class: "muted", text: `Righe lette (${data.items.length})` }),
         ...data.items.map((i) => el("div", { class: "muted", text: i.name + " · " + fmtEur(i.cents) })));

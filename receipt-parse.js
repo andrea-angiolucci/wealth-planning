@@ -77,5 +77,6 @@ export function parseReceipt(text, categoryNames = []) {
   let category = null;
   const hay = (merchant || "") + " " + lines.slice(0, 5).join(" ");
   for (const [re, name] of CATS) if (re.test(hay) && (!categoryNames.length || categoryNames.includes(name))) { category = name; break; }
-  return { total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
+  const amounts = [...freq].filter(([c]) => c >= 50 && c < 1000000).sort((a, b) => b[1] - a[1] || b[0] - a[0]).slice(0, 6).map(([c]) => c);
+  return { amounts, total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
 }
