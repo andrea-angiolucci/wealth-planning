@@ -173,7 +173,7 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "6";
+const APP_VERSION = "7";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -184,7 +184,7 @@ const eur = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" 
 const fmtEur = (cents) => eur.format(Number(cents) / 100);
 const TYPE_LABEL = { cash: "Contanti", bank: "Conto", card: "Carta di credito", prepaid: "Carta prepagata / debito", investment: "Investimenti", other: "Altro" };
 const state = {
-  tab: "moves", kind: "expense", categoryId: null, accounts: [], categories: [], recs: {},
+  open: {}, newAcc: false, tab: "moves", kind: "expense", categoryId: null, accounts: [], categories: [], recs: {},
   month: firstOfMonth(new Date()), panel: null, geo: null,
 };
 
@@ -618,23 +618,59 @@ function newAccountCard() {
   const date = el("input", { type: "date", value: iso(new Date()) });
   const pic = imagePicker(null);
   const box = el("div");
-  return collapsible("newacc", "Nuova carta o nuovo conto", box,
+  return el("div", { class: "panel" }, box,
     field("Nome", name), field("Tipo", type), field("Immagine della carta (facoltativa, dalla libreria foto)", pic.wrap),
     field("Saldo iniziale (carta di credito con debito: spunta negativo)", bal.wrap), field("Data del saldo iniziale", date),
     el("button", { style: "width:100%", text: "Aggiungi conto", onclick: async () => {
       if (!name.value.trim()) return msg(box, "Inserisci il nome.");
       const { error } = await sb.from("accounts").insert({ name: name.value.trim(), type: type.value, opening_balance_cents: bal.signed(), opening_date: date.value, image_data: pic.value() || null });
       if (error) return msg(box, "Conto non creato: " + error.message);
-      state.open.newacc = false; await refreshAll();
+      state.newAcc = false; await refreshAll();
     } }),
   );
 }
 
 /* ---------- CATEGORIE ---------- */
+async function deleteAccount(a) {
+  if (!confirm(`Eliminare "${a.name}"?`)) return;
+  const { error } = await sb.from("accounts").delete().eq("id", a.id);
+  if (error) {
+    if (!confirm(`"${a.name}" ha dei movimenti e non si può eliminare. Archiviarlo? Sparisce da liste e patrimonio, i movimenti restano.`)) return;
+    const r = await sb.from("accounts").update({ archived: true }).eq("id", a.id);
+    if (r.error) return alert("Non archiviato: " + r.error.message);
+  }
+  state.panel = null; await refreshAll();
+}
+function settingsAccounts() {
+  if (state.open.accs === undefined) state.open.accs = true;
+  const rows = state.accounts.map((a) => {
+    const editing = state.panel && state.panel.id === a.id && state.panel.kind === "edit";
+    return el("div", { class: "acc" },
+      el("div", { class: "row", style: "justify-content:flex-start" },
+        a.image_data ? el("img", { class: "thumb", src: a.image_data, alt: "" }) : null,
+        el("div", { style: "flex:1" }, el("strong", { text: a.name }), el("div", { class: "muted", text: TYPE_LABEL[a.type] }))),
+      el("div", { class: "actions" },
+        el("button", { class: "ghost small", text: editing ? "Chiudi" : "Modifica", onclick: () => { state.panel = editing ? null : { id: a.id, kind: "edit" }; renderSettings(); } }),
+        el("button", { class: "danger small", text: "Elimina", onclick: () => deleteAccount(a) })),
+      editing ? editPanel(a) : null);
+  });
+  const addBtn = el("button", { style: "width:100%;margin-top:10px", text: state.newAcc ? "Annulla" : "+ Nuova carta o conto", class: state.newAcc ? "ghost" : "",
+    onclick: () => { state.newAcc = !state.newAcc; renderSettings(); } });
+  return collapsible("accs", `Conti e carte (${state.accounts.length})`, ...rows, addBtn, state.newAcc ? newAccountCard() : null);
+}
 function renderSettings() {
   const root = $("viewSettings"); root.textContent = "";
   root.appendChild(el("div", { class: "head" }, el("h2", { text: "Impostazioni", style: "margin:0" }), el("button", { class: "ghost small", text: "Chiudi", onclick: () => setTab("moves") })));
-  root.appendChild(newAccountCard());
+  root.appendChild(settingsAccounts());
+  const arch = el("div"); root.appendChild(arch);
+  sb.from("accounts").select("id,name,type,image_data").eq("archived", true).then(({ data }) => {
+    if (!data || !data.length || state.tab !== "settings") return;
+    arch.appendChild(collapsible("arch", `Conti archiviati (${data.length})`, ...data.map((a) => el("div", { class: "tx" },
+      a.image_data ? el("img", { class: "thumb", src: a.image_data, alt: "" }) : null,
+      el("div", { class: "l t", text: a.name }),
+      el("button", { class: "ghost small", text: "Ripristina", onclick: async () => { await sb.from("accounts").update({ archived: false }).eq("id", a.id); await refreshAll(); } }),
+    ))));
+  });
   appendCats(root);
   const upd = el("div");
   root.appendChild(collapsible("app", "App e account",
