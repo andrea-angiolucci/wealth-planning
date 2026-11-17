@@ -1,22 +1,27 @@
-// Service worker minimale: la pagina viene sempre cercata prima in rete (cosi' gli aggiornamenti arrivano subito),
-// la cache serve solo se sei offline. Le chiamate a Supabase non vengono mai messe in cache.
-const CACHE = "wealth-shell-v2";
-const SHELL = ["./", "index.html", "manifest.json", "icon-180.png", "icon-192.png", "icon-512.png"];
+// Cambia VERSION ad ogni rilascio: il telefono scarica la nuova versione e ricarica da solo.
+const VERSION = "3";
+const CACHE = "wealth-shell-v" + VERSION;
+const SHELL = ["./", "index.html", "supabase.js", "manifest.json", "icon-180.png", "icon-192.png", "icon-512.png", "cards/amex.jpg", "cards/revolut.jpg", "cards/buddy.jpg", "cards/intesa-visa.jpg", "cards/intesa-mc.jpg"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
+// Rete prima (max 4 s), poi copia salvata: online sempre aggiornato, offline funziona.
 self.addEventListener("fetch", (e) => {
-  const url = new URL(e.request.url);
-  if (e.request.method !== "GET" || url.origin !== self.location.origin) return;
-  e.respondWith(
-    fetch(e.request).then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE).then((c) => c.put(e.request, copy));
+  const r = e.request, u = new URL(r.url);
+  if (r.method !== "GET" || u.origin !== location.origin) return;
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    try {
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
+      const res = await fetch(r, { signal: ctl.signal, cache: "no-cache" }); clearTimeout(t);
+      if (res.ok) cache.put(r, res.clone());
       return res;
-    }).catch(() => caches.match(e.request).then((r) => r || caches.match("./")))
-  );
+    } catch (err) {
+      return (await cache.match(r, { ignoreSearch: true })) || (r.mode === "navigate" ? await cache.match("index.html") : Response.error());
+    }
+  })());
 });

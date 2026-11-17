@@ -74,6 +74,9 @@
   .acc .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .acc .actions { display: flex; gap: 6px; margin-top: 8px; }
   .panel { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 10px; }
+  .thumb { width: 64px; height: 40px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); flex: none; }
+  .thumb.big { width: 100%; height: auto; max-height: 180px; margin-top: 8px; }
+  .banner { background: #422006; color: #fde68a; border-radius: 10px; padding: 8px 12px; font-size: 14px; margin-bottom: 12px; }
   .geo { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .geo .muted { flex: 1; }
   .geo button { flex: none; }
@@ -101,12 +104,12 @@
     <div class="head">
       <h1>Wealth</h1>
       <div id="patrimonioTop" class="muted"></div>
-      <button id="logout" class="ghost small">Esci</button>
     </div>
+    <div id="offline" class="banner hidden"></div>
     <div class="tabs">
       <button id="tabMoves" class="on">Movimenti</button>
       <button id="tabAccounts">Conti</button>
-      <button id="tabCats">Categorie</button>
+      <button id="tabSettings">Impostazioni</button>
     </div>
 
     <!-- MOVIMENTI -->
@@ -142,6 +145,7 @@
           <select id="account"></select>
           <input id="date" type="date">
         </div>
+        <div id="accImg"></div>
         <button id="save" style="width:100%">Salva</button>
       </div>
 
@@ -155,13 +159,14 @@
     <div id="viewAccounts" class="hidden"></div>
 
     <!-- CATEGORIE -->
-    <div id="viewCats" class="hidden"></div>
+    <div id="viewSettings" class="hidden"></div>
   </section>
 
 </div>
 
 <script type="module">
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "./supabase.js";
+const APP_VERSION = "3";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -170,7 +175,7 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: tr
 const $ = (id) => document.getElementById(id);
 const eur = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" });
 const fmtEur = (cents) => eur.format(Number(cents) / 100);
-const TYPE_LABEL = { cash: "Contanti", bank: "Conto", card: "Carta di credito", investment: "Investimenti", other: "Altro" };
+const TYPE_LABEL = { cash: "Contanti", bank: "Conto", card: "Carta di credito", prepaid: "Carta prepagata / debito", investment: "Investimenti", other: "Altro" };
 const state = {
   tab: "moves", kind: "expense", categoryId: null, accounts: [], categories: [], recs: {},
   month: firstOfMonth(new Date()), panel: null, geo: null,
@@ -225,6 +230,56 @@ function moneyInput({ big = false, withSign = false, signLabel = "Saldo negativo
   };
 }
 
+/* ---------- OFFLINE: cache locale e coda di invio ---------- */
+const OUT_KEY = "wp_outbox";
+const readJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
+const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+const outbox = () => readJSON(OUT_KEY, []);
+const isNetErr = (e) => !navigator.onLine || /fetch|network|load failed|timeout/i.test((e && e.message) || "");
+function updateBanner() {
+  const n = outbox().length, off = !navigator.onLine || state.cached;
+  const parts = [];
+  if (off) parts.push("Sei offline: vedi i dati dell'ultimo aggiornamento.");
+  if (n) parts.push(n + (n === 1 ? " movimento in attesa" : " movimenti in attesa") + " di invio.");
+  $("offline").textContent = parts.join(" ");
+  show($("offline"), parts.length > 0);
+}
+async function flushOutbox() {
+  const q = outbox(); if (!q.length || !navigator.onLine) return updateBanner();
+  const rest = [];
+  for (let i = 0; i < q.length; i++) {
+    const { error } = await sb.from("transactions").insert(q[i]);
+    if (error && error.code !== "23505") { rest.push(...q.slice(i)); break; }
+  }
+  writeJSON(OUT_KEY, rest); updateBanner();
+}
+window.addEventListener("online", async () => { await flushOutbox(); if (!$("app").classList.contains("hidden")) await refreshAll(); });
+window.addEventListener("offline", updateBanner);
+
+/* ---------- IMMAGINE (carte) ---------- */
+function imagePicker(current) {
+  let value; // undefined = invariata, null = rimossa, stringa = nuova
+  const holder = el("div");
+  const file = el("input", { type: "file", accept: "image/*" });
+  const draw = () => {
+    holder.textContent = "";
+    const src = value === undefined ? current : value;
+    if (src) holder.append(el("img", { class: "thumb big", src, alt: "" }), el("button", { type: "button", class: "ghost small", style: "margin-top:8px", text: "Rimuovi immagine", onclick: () => { value = null; draw(); } }));
+  };
+  file.onchange = async () => {
+    const f = file.files[0]; if (!f) return;
+    try {
+      const bmp = await createImageBitmap(f);
+      const k = Math.min(1, 640 / bmp.width);
+      const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+      value = c.toDataURL("image/jpeg", 0.82); draw();
+    } catch (e) { alert("Immagine non leggibile."); }
+  };
+  draw();
+  return { wrap: el("div", {}, file, holder), value: () => value };
+}
+
 /* ---------- LOGIN ---------- */
 $("email").value = localStorage.getItem("wp_email") || "";
 $("showPw").onchange = (e) => { $("password").type = e.target.checked ? "text" : "password"; };
@@ -240,23 +295,30 @@ $("loginForm").onsubmit = async (ev) => {
   localStorage.setItem("wp_email", email); $("password").value = "";
   await boot();
 };
-$("logout").onclick = async () => { await sb.auth.signOut(); await boot(); };
+async function doLogout() { await sb.auth.signOut(); localStorage.removeItem("wp_cache"); await boot(); }
 
 /* ---------- DATI DI BASE ---------- */
 async function loadRefs() {
   const [a, b, c, r] = await Promise.all([
-    sb.from("accounts").select("id,name,type,opening_balance_cents,opening_date").eq("archived", false).order("created_at"),
+    sb.from("accounts").select("id,name,type,opening_balance_cents,opening_date,image_data").eq("archived", false).order("created_at"),
     sb.from("account_balances").select("account_id,balance_cents"),
     sb.from("categories").select("id,name,kind,sort_order").eq("archived", false).order("sort_order").order("name"),
     sb.from("reconciliations").select("account_id,as_of,diff_cents").order("as_of", { ascending: false }).limit(300),
   ]);
   const err = a.error || b.error || c.error || r.error;
-  if (err) { msg("addMsg", "Errore nel caricamento: " + err.message); return false; }
+  if (err) {
+    const c = readJSON("wp_cache", null);
+    if (c) { state.accounts = c.accounts; state.categories = c.categories; state.recs = c.recs; state.cached = true; updateBanner(); return true; }
+    msg("addMsg", "Errore nel caricamento: " + err.message); return false;
+  }
+  state.cached = false;
   const bal = Object.fromEntries(b.data.map((x) => [x.account_id, Number(x.balance_cents)]));
   state.accounts = a.data.map((x) => ({ ...x, opening_balance_cents: Number(x.opening_balance_cents), balance: bal[x.id] ?? Number(x.opening_balance_cents) }));
   state.categories = c.data;
   state.recs = {};
   for (const x of r.data) if (!state.recs[x.account_id]) state.recs[x.account_id] = x;
+  writeJSON("wp_cache", { accounts: state.accounts, categories: state.categories, recs: state.recs });
+  updateBanner();
   return true;
 }
 async function refreshAll() {
@@ -264,7 +326,7 @@ async function refreshAll() {
   renderSelects(); renderChips(); renderPatrimonioTop();
   if (state.tab === "moves") await loadMonth();
   else if (state.tab === "accounts") renderAccounts();
-  else renderCats();
+  else renderSettings();
 }
 function renderPatrimonioTop() {
   const total = state.accounts.reduce((s, a) => s + a.balance, 0);
@@ -274,10 +336,17 @@ function fillAccountSelect(sel, selectedId) {
   sel.textContent = "";
   for (const a of state.accounts) sel.appendChild(el("option", { value: a.id, text: a.name, selected: a.id === selectedId }));
 }
+function renderAccImg() {
+  const box = $("accImg"); box.textContent = "";
+  const a = state.accounts.find((x) => x.id === $("account").value);
+  if (a && a.image_data) box.appendChild(el("img", { class: "thumb", src: a.image_data, alt: "", style: "margin-bottom:10px" }));
+}
 function renderSelects() {
   const keep = $("account").value || localStorage.getItem("wp_lastAccount");
   fillAccountSelect($("account"), keep);
+  renderAccImg();
 }
+$("account").onchange = renderAccImg;
 function renderChips() {
   const box = $("chips"); box.textContent = "";
   for (const c of state.categories.filter((x) => x.kind === state.kind)) {
@@ -291,15 +360,15 @@ function renderChips() {
 /* ---------- SCHEDE ---------- */
 function setTab(t) {
   state.tab = t; state.panel = null;
-  show($("viewMoves"), t === "moves"); show($("viewAccounts"), t === "accounts"); show($("viewCats"), t === "cats");
+  show($("viewMoves"), t === "moves"); show($("viewAccounts"), t === "accounts"); show($("viewSettings"), t === "settings");
   $("tabMoves").classList.toggle("on", t === "moves");
   $("tabAccounts").classList.toggle("on", t === "accounts");
-  $("tabCats").classList.toggle("on", t === "cats");
-  if (t === "moves") loadMonth(); else if (t === "accounts") renderAccounts(); else renderCats();
+  $("tabSettings").classList.toggle("on", t === "settings");
+  if (t === "moves") loadMonth(); else if (t === "accounts") renderAccounts(); else renderSettings();
 }
 $("tabMoves").onclick = () => setTab("moves");
 $("tabAccounts").onclick = () => setTab("accounts");
-$("tabCats").onclick = () => setTab("cats");
+$("tabSettings").onclick = () => setTab("settings");
 
 /* ---------- MOVIMENTI ---------- */
 const amountField = moneyInput({ big: true });
@@ -309,11 +378,16 @@ async function loadMonth() {
   const from = iso(state.month);
   const to = iso(new Date(state.month.getFullYear(), state.month.getMonth() + 1, 1));
   $("monthLabel").textContent = state.month.toLocaleDateString("it-IT", { month: "long", year: "numeric" });
-  const { data, error } = await sb.from("transactions")
+  const res = await sb.from("transactions")
     .select("id,occurred_on,amount_cents,merchant,category_id,account_id,kind,transfer_id,lat,lon")
     .gte("occurred_on", from).lt("occurred_on", to)
     .order("occurred_on", { ascending: false }).order("created_at", { ascending: false }).limit(500);
-  if (error) return msg("addMsg", "Errore nel caricamento movimenti: " + error.message);
+  let data = res.data;
+  const ck = "wp_tx_" + from;
+  if (res.error) { data = readJSON(ck, null); if (!data) return msg("addMsg", "Errore nel caricamento movimenti: " + res.error.message); }
+  else writeJSON(ck, data);
+  const pend = outbox().filter((r) => r.occurred_on >= from && r.occurred_on < to).map((r) => ({ ...r, pending: true }));
+  data = [...pend, ...data];
   const catName = Object.fromEntries(state.categories.map((c) => [c.id, c.name]));
   const accName = Object.fromEntries(state.accounts.map((a) => [a.id, a.name]));
   let out = 0, inn = 0;
@@ -321,7 +395,8 @@ async function loadMonth() {
   for (const t of data) {
     const v = Number(t.amount_cents);
     if (t.kind === "normal") { if (v < 0) out += -v; else inn += v; }
-    const title = t.kind === "transfer" ? "Giroconto" : t.kind === "adjustment" ? "Rettifica quadratura" : (t.merchant || catName[t.category_id] || "Senza descrizione");
+    const title0 = t.kind === "transfer" ? "Giroconto" : t.kind === "adjustment" ? "Rettifica quadratura" : (t.merchant || catName[t.category_id] || "Senza descrizione");
+    const title = t.pending ? title0 + " (in attesa)" : title0;
     const sub = itDate(t.occurred_on) + " · " + (accName[t.account_id] || "?") + (t.category_id && t.kind === "normal" ? " · " + catName[t.category_id] : "");
     const subNode = el("div", { class: "muted" }, sub);
     if (t.lat != null && t.lon != null) {
@@ -330,7 +405,7 @@ async function loadMonth() {
     list.appendChild(el("div", { class: "tx" },
       el("div", { class: "l" }, el("div", { class: "t", text: title }), subNode),
       el("div", { class: "a " + (t.kind !== "normal" ? "" : v < 0 ? "out" : "in"), text: fmtEur(v) }),
-      el("button", { class: "x", "aria-label": "Elimina", text: "×", onclick: () => deleteTx(t) }),
+      el("button", { class: "x", "aria-label": "Elimina", text: "×", onclick: () => t.pending ? (writeJSON(OUT_KEY, outbox().filter((r) => r.id !== t.id)), updateBanner(), loadMonth()) : deleteTx(t) }),
     ));
   }
   show($("empty"), data.length === 0);
@@ -376,7 +451,7 @@ $("save").onclick = async () => {
   if (!$("account").value) return msg("addMsg", "Manca il conto: aggiungilo nella scheda Conti.");
   $("save").disabled = true;
   const row = {
-    account_id: $("account").value, category_id: state.categoryId,
+    id: crypto.randomUUID(), account_id: $("account").value, category_id: state.categoryId,
     occurred_on: $("date").value || iso(new Date()),
     amount_cents: state.kind === "expense" ? -cents : cents,
     merchant: $("merchant").value.trim() || null, source: "manual", kind: "normal",
@@ -384,10 +459,14 @@ $("save").onclick = async () => {
   };
   const { error } = await sb.from("transactions").insert(row);
   $("save").disabled = false;
-  if (error) return msg("addMsg", "Salvataggio non riuscito: " + error.message);
+  let queued = false;
+  if (error) {
+    if (!isNetErr(error)) return msg("addMsg", "Salvataggio non riuscito: " + error.message);
+    writeJSON(OUT_KEY, [...outbox(), row]); queued = true; updateBanner();
+  }
   localStorage.setItem("wp_lastAccount", row.account_id);
   amountField.reset(); $("merchant").value = ""; state.categoryId = null; state.geo = null; renderGeo(); renderChips();
-  msg("addMsg", "Salvato.", "ok"); setTimeout(() => msg("addMsg", ""), 1500);
+  msg("addMsg", queued ? "Salvato sul telefono: verrà inviato appena c'è rete." : "Salvato.", "ok"); setTimeout(() => msg("addMsg", ""), 2500);
   await refreshAll(); amountField.input.focus();
 };
 $("prevM").onclick = () => { state.month = new Date(state.month.getFullYear(), state.month.getMonth() - 1, 1); loadMonth(); };
@@ -416,7 +495,7 @@ function renderAccounts() {
     const recTxt = rec ? `Ultima quadratura ${itDate(rec.as_of)}: ` + (Number(rec.diff_cents) === 0 ? "ok" : "differenza " + fmtEur(rec.diff_cents)) : "Mai quadrato con l'estratto conto";
     const open = state.panel && state.panel.id === a.id ? state.panel.kind : null;
     card.appendChild(el("div", { class: "acc" },
-      el("div", { class: "top" }, el("div", {}, el("strong", { text: a.name }), el("span", { class: "muted", text: " · " + TYPE_LABEL[a.type] })),
+      el("div", { class: "top" }, el("div", { class: "row", style: "justify-content:flex-start;flex:1" }, a.image_data ? el("img", { class: "thumb", src: a.image_data, alt: "" }) : null, el("div", { style: "flex:1" }, el("strong", { text: a.name }), el("span", { class: "muted", text: " · " + TYPE_LABEL[a.type] }))),
         el("strong", { class: a.balance < 0 ? "out" : "", text: fmtEur(a.balance) })),
       el("div", { class: "muted", text: `Saldo iniziale ${fmtEur(a.opening_balance_cents)} al ${itDate(a.opening_date)}. ${recTxt}.` }),
       el("div", { class: "actions" },
@@ -429,7 +508,6 @@ function renderAccounts() {
   }
   root.appendChild(card);
   root.appendChild(transferCard());
-  root.appendChild(newAccountCard());
 }
 
 function editPanel(a) {
@@ -437,15 +515,16 @@ function editPanel(a) {
   const type = typeSelect(a.type);
   const bal = moneyInput({ withSign: true }); bal.set(a.opening_balance_cents);
   const date = el("input", { type: "date", value: a.opening_date });
+  const pic = imagePicker(a.image_data);
   const box = el("div");
   return el("div", { class: "panel" },
-    box, field("Nome", name), field("Tipo", type),
+    box, field("Nome", name), field("Tipo", type), field("Immagine della carta (facoltativa)", pic.wrap),
     field("Saldo iniziale", bal.wrap), field("Data del saldo iniziale", date),
     el("p", { class: "muted", text: "Contano solo i movimenti con data uguale o successiva a quella del saldo iniziale." }),
     el("div", { class: "row" },
       el("button", { text: "Salva", onclick: async () => {
         if (!name.value.trim()) return msg(box, "Il nome non può essere vuoto.");
-        const { error } = await sb.from("accounts").update({ name: name.value.trim(), type: type.value, opening_balance_cents: bal.signed(), opening_date: date.value }).eq("id", a.id);
+        const { error } = await sb.from("accounts").update({ name: name.value.trim(), type: type.value, opening_balance_cents: bal.signed(), opening_date: date.value, ...(pic.value() !== undefined ? { image_data: pic.value() } : {}) }).eq("id", a.id);
         if (error) return msg(box, "Non salvato: " + error.message);
         state.panel = null; await refreshAll();
       } }),
@@ -520,13 +599,14 @@ function newAccountCard() {
   const type = typeSelect("bank");
   const bal = moneyInput({ withSign: true });
   const date = el("input", { type: "date", value: iso(new Date()) });
+  const pic = imagePicker(null);
   const box = el("div");
-  return el("div", { class: "card" }, el("h2", { text: "Nuovo conto" }), box,
-    field("Nome", name), field("Tipo", type),
+  return el("div", { class: "card" }, el("h2", { text: "Nuovo conto o carta" }), box,
+    field("Nome", name), field("Tipo", type), field("Immagine della carta (facoltativa, dalla libreria foto)", pic.wrap),
     field("Saldo iniziale (carta di credito con debito: spunta negativo)", bal.wrap), field("Data del saldo iniziale", date),
     el("button", { style: "width:100%", text: "Aggiungi conto", onclick: async () => {
       if (!name.value.trim()) return msg(box, "Inserisci il nome.");
-      const { error } = await sb.from("accounts").insert({ name: name.value.trim(), type: type.value, opening_balance_cents: bal.signed(), opening_date: date.value });
+      const { error } = await sb.from("accounts").insert({ name: name.value.trim(), type: type.value, opening_balance_cents: bal.signed(), opening_date: date.value, image_data: pic.value() || null });
       if (error) return msg(box, "Conto non creato: " + error.message);
       await refreshAll();
     } }),
@@ -534,8 +614,23 @@ function newAccountCard() {
 }
 
 /* ---------- CATEGORIE ---------- */
-function renderCats() {
-  const root = $("viewCats"); root.textContent = "";
+function renderSettings() {
+  const root = $("viewSettings"); root.textContent = "";
+  root.appendChild(newAccountCard());
+  appendCats(root);
+  const upd = el("div");
+  root.appendChild(el("div", { class: "card" }, el("h2", { text: "App" }),
+    el("p", { class: "muted", text: "Versione " + APP_VERSION + ". Si aggiorna da sola quando c'è rete e funziona anche offline." }), upd,
+    el("div", { class: "row" },
+      el("button", { class: "ghost", text: "Cerca aggiornamenti", onclick: async () => {
+        msg(upd, "Controllo...", "ok");
+        try { const r = await navigator.serviceWorker.getRegistration(); if (r) await r.update(); msg(upd, "Controllo fatto: se c'è una nuova versione l'app si ricarica da sola.", "ok"); } catch (e) { msg(upd, "Controllo non riuscito (sei offline?)."); }
+      } }),
+      el("button", { class: "danger", text: "Esci", onclick: doLogout }),
+    ),
+  ));
+}
+function appendCats(root) {
   for (const [kind, title] of [["expense", "Categorie di spesa"], ["income", "Categorie di entrata"]]) {
     const card = el("div", { class: "card" }, el("h2", { text: title }));
     for (const c of state.categories.filter((x) => x.kind === kind)) {
@@ -571,10 +666,15 @@ function renderCats() {
 }
 
 /* ---------- AVVIO ---------- */
+function hasStoredSession() { return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k)); }
 async function boot() {
-  const { data: { session } } = await sb.auth.getSession();
-  show($("login"), !session); show($("app"), !!session);
-  if (!session) return;
+  let session = null;
+  try { ({ data: { session } } = await sb.auth.getSession()); } catch (e) {}
+  const offlineOk = !session && !navigator.onLine && hasStoredSession() && readJSON("wp_cache", null);
+  const inApp = !!session || !!offlineOk;
+  show($("login"), !inApp); show($("app"), inApp);
+  if (!inApp) return;
+  flushOutbox();
   $("date").value = iso(new Date());
   setKind("expense"); renderGeo();
   if (await loadRefs()) { renderSelects(); renderChips(); renderPatrimonioTop(); }
@@ -582,7 +682,15 @@ async function boot() {
 }
 boot();
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+  navigator.serviceWorker.register("sw.js").then((reg) => {
+    reg.update().catch(() => {});
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
+  }).catch(() => {});
+}
 </script>
 </body>
 </html>
