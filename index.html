@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "13";
+const APP_VERSION = "14";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -511,7 +511,8 @@ async function ocrText(file, onProgress) {
   for (let i = 0; i < px.length; i += 4) { const v = Math.max(0, Math.min(255, ((px[i] - lo) * 255) / span)); px[i] = px[i + 1] = px[i + 2] = v; }
   ctx.putImageData(im, 0, 0);
   if (!ocrWorker) {
-    const { createWorker } = await import("./ocr/tesseract.esm.min.js");
+    const tmod = await import("./ocr/tesseract.esm.min.js");
+    const createWorker = tmod.createWorker || (tmod.default && tmod.default.createWorker);
     ocrWorker = await createWorker("ita", 1, {
       workerPath: new URL("./ocr/worker.min.js", location.href).href, corePath: new URL("./ocr/core", location.href).href,
       langPath: new URL("./ocr/lang", location.href).href, gzip: true, workerBlobURL: false,
