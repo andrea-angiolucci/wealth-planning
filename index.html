@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "23";
+const APP_VERSION = "24";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -528,7 +528,7 @@ async function ocrText(file, onProgress) {
     const { data } = await ocrWorker.recognize(c);
     out.push(data.text);
     const q = parseReceipt(data.text, []);
-    if (q.total_cents && !q.total_guess && q.date) break;
+    if (q.total_cents && q.total_support >= 2 && q.date) break;
   }
   return out.join("\n=====\n");
 }

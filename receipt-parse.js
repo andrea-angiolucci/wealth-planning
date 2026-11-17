@@ -37,14 +37,26 @@ export function parseReceipt(text, categoryNames = []) {
   const all = lines.filter((l) => !/IVA|%|PARTITA|CARTA N|DOCUMENTO/i.test(l)).flatMap((l) => [...l.matchAll(AMOUNT)].map((m) => toCents(m[1])));
   const freq = new Map(); all.forEach((c) => freq.set(c, (freq.get(c) || 0) + 1));
   const repeated = [...freq].filter(([c, n]) => n >= 2 && c > 0).map(([c]) => c);
-  let total = null, totalGuess = false;
-  if (cands.length) {
-    const strong = cands.filter((c) => c.strong);
-    if (strong.length) total = strong[strong.length - 1].cents; // l'ultimo "totale" e' quello finale
+  // scelta del totale: ogni valore candidato prende punti dalle volte in cui compare nel testo (due letture diverse
+  // che concordano contano molto), dal tipo di riga (TOTALE > SUBTOTALE) e dalla somma dei prezzi accanto alle aliquote IVA
+  let rateSum = 0;
+  for (const m of String(text).split("\n=====\n")[0].matchAll(/\d{1,2}\s?[.,]\s?00\s?%\s*(\d{1,4}[.,]\d{2})(?!\d)/g)) rateSum += toCents(m[1]);
+  const pool = new Map();
+  const add = (c, kind) => { const e = pool.get(c) || { strong: false, soft: false }; e[kind] = true; pool.set(c, e); };
+  cands.forEach((c) => c.strong && add(c.cents, "strong"));
+  soft.forEach((c) => add(c, "soft"));
+  let total = null, totalGuess = false, support = 0;
+  if (pool.size) {
+    let best = -1;
+    for (const [c, e] of pool) {
+      const occ = occurrences(text, c);
+      const sc = occ * 10 + (e.strong ? 3 : 0) + (e.soft ? 2 : 0) + (rateSum && Math.abs(rateSum - c) <= 2 ? 20 : 0);
+      if (sc >= best) { best = sc; total = c; support = occ + (rateSum && Math.abs(rateSum - c) <= 2 ? 2 : 0); }
+    }
+    totalGuess = support < 2;
   }
-  if (total == null && soft.length) { total = soft[soft.length - 1]; totalGuess = occurrences(text, total) < 2; } // confermato se compare almeno due volte
-  if (total == null && repeated.length) { total = Math.max(...repeated); totalGuess = true; }
-  if (total == null && cands.length) { total = cands[cands.length - 1].cents; totalGuess = true; }
+  if (total == null && repeated.length) { total = Math.max(...repeated); totalGuess = true; support = 1; }
+  if (total == null && cands.length) { total = cands[cands.length - 1].cents; totalGuess = true; support = 1; }
   // data
   let date = null;
   for (const l of lines) {
@@ -92,5 +104,5 @@ export function parseReceipt(text, categoryNames = []) {
   const hay = (merchant || "") + " " + lines.slice(0, 5).join(" ");
   for (const [re, name] of CATS) if (re.test(hay) && (!categoryNames.length || categoryNames.includes(name))) { category = name; break; }
   const amounts = [...freq].filter(([c]) => c >= 50 && c < 1000000).sort((a, b) => b[1] - a[1] || b[0] - a[0]).slice(0, 6).map(([c]) => c);
-  return { date_fixed: dateFixed, amounts, total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
+  return { total_support: support, date_fixed: dateFixed, amounts, total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
 }
