@@ -77,7 +77,9 @@
   .thumb { width: 64px; height: 40px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); flex: none; }
   .thumb.big { width: 100%; height: auto; max-height: 180px; margin-top: 8px; }
   .banner { background: #422006; color: #fde68a; border-radius: 10px; padding: 8px 12px; font-size: 14px; margin-bottom: 12px; }
-  input[type=date] { min-width: 0; max-width: 100%; -webkit-appearance: none; appearance: none; text-align: left; }
+  input[type=date] { display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 48px; -webkit-appearance: none; appearance: none; text-align: left; }
+  input[type=date]::-webkit-date-and-time-value { text-align: left; min-width: 0; margin: 0; }
+  input[type=date]::-webkit-calendar-picker-indicator { margin-left: auto; }
   .card.fold { padding: 0; overflow: hidden; }
   .fold-head { display: flex; justify-content: space-between; align-items: center; width: 100%; background: transparent; color: var(--text); border-radius: 0; padding: 14px; font-size: 16px; font-weight: 600; text-align: left; }
   .fold-head .chev { color: var(--muted); font-size: 14px; }
@@ -171,7 +173,7 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "5";
+const APP_VERSION = "6";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
