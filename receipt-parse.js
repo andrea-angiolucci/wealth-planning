@@ -40,13 +40,32 @@ export function parseReceipt(text, categoryNames = []) {
   const repeated = [...freq].filter(([c, n]) => n >= 2 && c > 0).map(([c]) => c);
   // scelta del totale: ogni valore candidato prende punti dalle volte in cui compare nel testo (due letture diverse
   // che concordano contano molto), dal tipo di riga (TOTALE > SUBTOTALE) e dalla somma dei prezzi accanto alle aliquote IVA
-  let rateSum = 0;
-  for (const m of String(text).split("\n=====\n")[0].matchAll(/\d{1,2}\s?[.,]\s?00\s?%\s*(\d{1,4}[.,]\d{2})(?!\d)/g)) rateSum += toCents(m[1]);
+  // somma dei prezzi accanto alle aliquote IVA: se in una lettura sono leggibili almeno 3 righe, e' un controllo forte sul totale
+  let rateSum = 0, rateCount = 0;
+  for (const chunk of String(text).split("\n=====\n")) {
+    let sm = 0, n = 0;
+    for (const m of chunk.matchAll(/\d{1,2}\s?[.,]\s?[0OC]{2}\s?%\s*(\d{1,4}[.,]\d{2})(?!\d)/g)) { sm += toCents(m[1]); n++; }
+    if (n >= 3 && n >= rateCount) { rateSum = sm; rateCount = n; }
+  }
   let maxItem = 0;
-  for (const m of String(text).matchAll(/\d{1,2}\s?[.,]\s?00\s?%\s*(\d{1,4}[.,]\d{2})(?!\d)/g)) maxItem = Math.max(maxItem, toCents(m[1]));
+  for (const m of String(text).matchAll(/\d{1,2}\s?[.,]\s?[0OC]{2}\s?%\s*(\d{1,4}[.,]\d{2})(?!\d)/g)) maxItem = Math.max(maxItem, toCents(m[1]));
+  // somma delle forme di pagamento (elettronico + ticket/buono pasto + contanti + non riscosso), prima del dettaglio finale
+  let paySum = 0;
+  for (const chunk of String(text).split("\n=====\n")) {
+    const seen = new Set(); let sm = 0;
+    for (const l of chunk.split(/\r?\n/)) {
+      if (/DETTAGLIO/i.test(l)) break;
+      const kind = /ELETTRONIC|ELETTR0NIC/i.test(l) ? "e" : /CONTANT/i.test(l) ? "c" : /TICKE|BUON[OI]\s*PAST|NON RISCOSS/i.test(l) ? "t" : null;
+      const am = [...l.matchAll(AMOUNT)].map((m) => toCents(m[1]));
+      if (kind && am.length && !seen.has(kind)) { seen.add(kind); sm += am[am.length - 1]; }
+    }
+    if (seen.size >= 2 && sm > paySum) paySum = sm;
+  }
   const pool = new Map();
-  const add = (c, kind) => { const e = pool.get(c) || { strong: false, soft: false }; e[kind] = true; pool.set(c, e); };
+  const add = (c, kind) => { const e = pool.get(c) || { strong: false, soft: false, rate: false, pay: false }; e[kind] = true; pool.set(c, e); };
   cands.forEach((c) => c.strong && add(c.cents, "strong"));
+  if (rateSum) add(rateSum, "rate");
+  if (paySum) add(paySum, "pay");
   soft.forEach((c) => add(c, "soft"));
   let total = null, totalGuess = false, support = 0;
   if (maxItem) { const big = [...pool.keys()].filter((c) => c < maxItem); if (big.length < pool.size) big.forEach((c) => pool.delete(c)); }
@@ -54,10 +73,11 @@ export function parseReceipt(text, categoryNames = []) {
     let best = -1;
     for (const [c, e] of pool) {
       const occ = occurrences(text, c);
-      const sc = occ * 10 + (e.strong ? 3 : 0) + (e.soft ? 2 : 0) + (rateSum && Math.abs(rateSum - c) <= 2 ? 20 : 0);
-      if (sc >= best) { best = sc; total = c; support = occ + (rateSum && Math.abs(rateSum - c) <= 2 ? 2 : 0); }
+      // fonti indipendenti che indicano questo importo: riga TOTALE/SUBTOTALE, somma righe con IVA, somma pagamenti
+      const n = (e.strong || e.soft ? 1 : 0) + (rateSum && Math.abs(rateSum - c) <= 2 ? 1 : 0) + (paySum && c === paySum ? 1 : 0);
+      const sc = occ * 10 + n * 10 + (e.strong ? 3 : 0) + (e.soft ? 2 : 0) + (paySum && c === paySum ? 3 : 0);
+      if (sc >= best) { best = sc; total = c; support = occ + n - (occ ? 0 : 0); totalGuess = occ < 2 && n < 2; }
     }
-    totalGuess = support < 2;
   }
   if (total == null && all.length) { total = Math.max(...all); totalGuess = true; support = 1; } // ultima risorsa: l'importo piu alto letto (sempre segnalato)
   if (total == null && cands.length) { total = cands[cands.length - 1].cents; totalGuess = true; support = 1; }
