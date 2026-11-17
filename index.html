@@ -199,7 +199,8 @@
 <script type="module">
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
-const APP_VERSION = "12";
+import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
+const APP_VERSION = "13";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -652,6 +653,7 @@ function renderAccounts() {
   }
   root.appendChild(card);
   root.appendChild(transferCard());
+  root.appendChild(importCard());
 }
 
 function editPanel(a) {
@@ -712,6 +714,78 @@ function recPanel(a) {
   );
 }
 
+function importCard() {
+  const accSel = el("select"); fillAccountSelect(accSel, localStorage.getItem("wp_lastAccount"));
+  const file = el("input", { type: "file", accept: ".csv,text/csv,text/plain,.txt" });
+  const out = el("div"); let rows = null, map = null, flip = false, skipManual = true;
+  const colSel = (label, key, allowNone) => {
+    const n = Math.max(...rows.map((r) => r.length)), sel = el("select");
+    if (allowNone) sel.appendChild(el("option", { value: -1, text: "(nessuna)", selected: map[key] < 0 }));
+    for (let i = 0; i < n; i++) sel.appendChild(el("option", { value: i, text: (map.header && map.header[i] ? map.header[i] : "Colonna " + (i + 1)), selected: map[key] === i }));
+    sel.onchange = () => { map[key] = Number(sel.value); draw(); };
+    return field(label, sel);
+  };
+  async function draw() {
+    out.textContent = "";
+    if (!rows) return;
+    const b = buildRows(rows, map, { flip });
+    const acc = state.accounts.find((a) => a.id === accSel.value);
+    out.append(colSel("Colonna della data", "dateCol", false), colSel("Colonna della descrizione", "descCol", false), colSel("Colonna dell'importo", "amountCol", true),
+      colSel("Colonna Dare (uscite), se separata", "debitCol", true), colSel("Colonna Avere (entrate), se separata", "creditCol", true));
+    const f = el("input", { type: "checkbox", checked: flip, onchange: (e) => { flip = e.target.checked; draw(); } });
+    const sm = el("input", { type: "checkbox", checked: skipManual, onchange: (e) => { skipManual = e.target.checked; } });
+    out.append(el("label", { class: "check" }, f, "Le spese nel file sono positive (tipico delle carte di credito): inverti il segno"),
+      el("label", { class: "check" }, sm, "Salta i movimenti che sembrano già inseriti a mano (stesso importo, ±3 giorni)"));
+    const inn = b.rows.filter((r) => r.cents > 0).reduce((s2, r) => s2 + r.cents, 0), outv = b.rows.filter((r) => r.cents < 0).reduce((s2, r) => s2 + r.cents, 0);
+    out.append(el("p", { class: "muted", text: `Letti ${b.rows.length} movimenti (${b.skipped} righe ignorate). Entrate ${fmtEur(inn)}, uscite ${fmtEur(-outv)}.` }));
+    for (const r of b.rows.slice(0, 5)) out.append(el("div", { class: "tx" }, el("div", { class: "l t", text: itDate(r.date) + " · " + (r.desc || "—") }), el("div", { class: "a " + (r.cents < 0 ? "out" : "in"), text: fmtEur(r.cents) })));
+    const res = el("div");
+    out.append(res, el("button", { style: "width:100%;margin-top:10px", disabled: !b.rows.length, text: `Importa su ${acc ? acc.name : "conto"}`, onclick: (ev) => doImport(b.rows, acc, res, ev.target) }));
+  }
+  async function doImport(list, acc, res, btn) {
+    if (!acc) return msg(res, "Scegli il conto.");
+    btn.disabled = true; msg(res, "Importo...", "ok");
+    try {
+      const dates = list.map((r) => r.date).sort(), pad = (d, n) => { const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() + n); return iso(x); };
+      const ex = await sb.from("transactions").select("occurred_on,amount_cents,external_id,source").eq("account_id", acc.id).gte("occurred_on", pad(dates[0], -3)).lte("occurred_on", pad(dates[dates.length - 1], 3)).limit(5000);
+      if (ex.error) throw ex.error;
+      const known = new Set(ex.data.map((t) => t.external_id).filter(Boolean));
+      const manual = ex.data.filter((t) => t.source !== "csv" && t.source !== "bank").map((t) => ({ d: t.occurred_on, c: Number(t.amount_cents), used: false }));
+      const mem = new Map(); const hist = await sb.from("transactions").select("merchant,category_id").not("category_id", "is", null).not("merchant", "is", null).limit(3000);
+      for (const h of hist.data || []) mem.set(String(h.merchant).toLowerCase().replace(/\s+/g, " ").trim(), h.category_id);
+      const seen = {}; let dup = 0, man = 0, before = 0; const ins = [];
+      for (const r of list) {
+        const k = r.date + "|" + r.cents + "|" + r.desc.toLowerCase(); seen[k] = (seen[k] || 0) + 1;
+        const id = await hashRow(acc.id, r, seen[k] - 1);
+        if (known.has(id)) { dup++; continue; }
+        if (skipManual) { const hit = manual.find((m) => !m.used && m.c === r.cents && Math.abs((new Date(m.d) - new Date(r.date)) / 86400000) <= 3); if (hit) { hit.used = true; man++; continue; } }
+        if (acc.opening_date && r.date < acc.opening_date) before++;
+        let cat = guessCategory(r.desc.toLowerCase(), mem); const cobj = state.categories.find((c) => c.id === cat);
+        if (cobj && ((r.cents < 0) !== (cobj.kind === "expense"))) cat = null;
+        ins.push({ account_id: acc.id, occurred_on: r.date, amount_cents: r.cents, merchant: r.desc || null, category_id: cat, source: "csv", external_id: id, kind: "normal" });
+      }
+      for (let i = 0; i < ins.length; i += 200) { const e = await sb.from("transactions").insert(ins.slice(i, i + 200)); if (e.error) throw e.error; }
+      localStorage.setItem("wp_lastAccount", acc.id);
+      const parts = [`Importati ${ins.length} movimenti.`];
+      if (dup) parts.push(`${dup} già importati in precedenza.`); if (man) parts.push(`${man} saltati perché già inseriti a mano.`);
+      if (before) parts.push(`${before} sono precedenti al saldo iniziale del conto (${itDate(acc.opening_date)}) e non cambiano il saldo.`);
+      await refreshAll(); const r2 = $("viewAccounts").querySelector("[data-imp]"); if (r2) msg(r2, parts.join(" "), "ok");
+    } catch (e) { btn.disabled = false; msg(res, "Importazione non riuscita: " + (e.message || e)); }
+  }
+  file.onchange = async () => {
+    const f = file.files[0]; if (!f) return;
+    rows = parseCsv(decodeBytes(await f.arrayBuffer())); if (!rows.length) return msg(out, "File vuoto o non leggibile.");
+    map = detectMapping(rows);
+    const acc = state.accounts.find((a) => a.id === accSel.value), b = buildRows(rows, map);
+    flip = !!acc && (acc.type === "card") && b.rows.filter((r) => r.cents > 0).length > b.rows.length / 2;
+    draw();
+  };
+  const done = el("div", { "data-imp": "1" });
+  state.open.imp = state.open.imp || false;
+  return collapsible("imp", "Importa estratto conto (CSV)", done,
+    el("p", { class: "muted", text: "Esporta il file CSV dall'home banking e caricalo qui: l'app riconosce le colonne, salta i doppioni e propone le categorie dallo storico." }),
+    field("Conto", accSel), field("File CSV", file), out);
+}
 function transferCard() {
   const from = el("select"), to = el("select");
   fillAccountSelect(from, state.accounts[0] && state.accounts[0].id);
