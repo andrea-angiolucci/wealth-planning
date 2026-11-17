@@ -59,7 +59,7 @@ export function parseReceipt(text, categoryNames = []) {
     }
     totalGuess = support < 2;
   }
-  if (total == null && repeated.length) { total = Math.max(...repeated); totalGuess = true; support = 1; }
+  if (total == null && all.length) { total = Math.max(...all); totalGuess = true; support = 1; } // ultima risorsa: l'importo piu alto letto (sempre segnalato)
   if (total == null && cands.length) { total = cands[cands.length - 1].cents; totalGuess = true; support = 1; }
   // data
   let date = null;
