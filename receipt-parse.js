@@ -3,7 +3,7 @@ const AMOUNT = /(\d{1,5}\s?[.,]\s?\d{2})(?!\d)/g;
 const toCents = (s) => Math.round(parseFloat(s.replace(/\s/g, "").replace(",", ".")) * 100);
 const SKIP_ITEM = /(TOTALE|SUBTOTALE|SUB-TOTALE|IVA|RESTO|CONTANT|PAGAMENTO|IMPORTO|SCONTO|ARROTOND|CARTA|BANCOMAT|POS|ELETTRONIC|NON RISCOSSO|DI CUI|PREZZO|IMPONIBILE|CODICE|TEL)/i;
 const CATS = [
-  [/(CONAD|COOP|CARREFOUR|LIDL|EUROSPIN|MD |SUPERMERCAT|ALIMENTAR|MACELLERIA|PANETTERIA|FORNO|ORTOFRUTTA|DESPAR|PENNY|TODIS|SIGMA|FAMILA|PAM |IPER|ALIMENT)/i, "Alimentari"],
+  [/(SUPERSTORE|DECO|CONAD|COOP|CARREFOUR|LIDL|EUROSPIN|MD |SUPERMERCAT|ALIMENTAR|MACELLERIA|PANETTERIA|FORNO|ORTOFRUTTA|DESPAR|PENNY|TODIS|SIGMA|FAMILA|PAM |IPER|ALIMENT)/i, "Alimentari"],
   [/(FARMACIA|PARAFARMAC|OTTIC|CLINICA|AMBULATORIO|MEDIC)/i, "Salute"],
   [/(ENI |Q8|TAMOIL|ESSO|CARBURANT|DISTRIBUTORE|STAZIONE DI SERVIZIO|AUTOLAVAGGIO|IP |API )/i, "Auto"],
   [/(RISTORANTE|PIZZERIA|TRATTORIA|OSTERIA|BAR |CAFFE|CAFFÈ|GELATERIA|PASTICCERIA|PUB |SUSHI|BIRRERIA|PANINOTECA)/i, "Ristoranti e bar"],
@@ -56,6 +56,19 @@ export function parseReceipt(text, categoryNames = []) {
     const t = lines.join("\n").match(/(\d{1,2})[^\d\n]{0,2}(\d{1,2})[^\d\n]{0,2}(20[2-3]\d)/);
     if (t) { const d = +t[1], mo = +t[2], y = +t[3]; if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) date = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
   }
+  // anno letto male dall'OCR (es. 2026 -> 2020): se con l'anno corrente la data cade negli ultimi 60 giorni, la correggo
+  let dateFixed = false;
+  if (date) {
+    const now = new Date(), day = 86400000;
+    const [y, mo, d] = date.split("-").map(Number);
+    const diff = (now - new Date(y, mo - 1, d)) / day;
+    if (diff > 60 || diff < -1) {
+      for (const yy of [now.getFullYear(), now.getFullYear() - 1]) {
+        const df = (now - new Date(yy, mo - 1, d)) / day;
+        if (df >= -1 && df <= 60) { date = `${yy}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`; dateFixed = true; break; }
+      }
+    }
+  }
   // esercente: prima riga "da nome"
   let merchant = null;
   const corp = lines.slice(0, 12).find((l) => /\b(SRL|S\.?R\.?L\.?|SPA|S\.?P\.?A\.?|SNC|SAS)\b/i.test(l) && (l.match(/[A-Za-zÀ-ÿ]/g) || []).length >= 6);
@@ -78,5 +91,5 @@ export function parseReceipt(text, categoryNames = []) {
   const hay = (merchant || "") + " " + lines.slice(0, 5).join(" ");
   for (const [re, name] of CATS) if (re.test(hay) && (!categoryNames.length || categoryNames.includes(name))) { category = name; break; }
   const amounts = [...freq].filter(([c]) => c >= 50 && c < 1000000).sort((a, b) => b[1] - a[1] || b[0] - a[0]).slice(0, 6).map(([c]) => c);
-  return { amounts, total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
+  return { date_fixed: dateFixed, amounts, total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
 }
