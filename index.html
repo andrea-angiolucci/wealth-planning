@@ -150,6 +150,12 @@
           <button id="kOut" class="on out">Uscita</button>
           <button id="kIn" class="in">Entrata</button>
         </div>
+        <div class="geo">
+          <button id="scanBtn" type="button" class="ghost small">Scansiona scontrino</button>
+          <input id="scanFile" type="file" accept="image/*" capture="environment" class="hidden">
+          <span id="scanInfo" class="muted"></span>
+        </div>
+        <div id="scanOut"></div>
         <div id="amountBox"></div>
         <div id="chips" class="chips"></div>
         <div class="field"><input id="merchant" type="text" placeholder="Dove / descrizione (facoltativo)" autocomplete="off"></div>
@@ -183,7 +189,7 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "9";
+const APP_VERSION = "10";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -400,7 +406,7 @@ async function loadMonth() {
   const to = iso(new Date(state.month.getFullYear(), state.month.getMonth() + 1, 1));
   $("monthLabel").textContent = state.month.toLocaleDateString("it-IT", { month: "long", year: "numeric" });
   const res = await sb.from("transactions")
-    .select("id,occurred_on,amount_cents,merchant,category_id,account_id,kind,transfer_id,lat,lon")
+    .select("id,occurred_on,amount_cents,merchant,category_id,account_id,kind,transfer_id,lat,lon,receipt_path")
     .gte("occurred_on", from).lt("occurred_on", to)
     .order("occurred_on", { ascending: false }).order("created_at", { ascending: false }).limit(500);
   let data = res.data;
@@ -423,6 +429,14 @@ async function loadMonth() {
     if (t.lat != null && t.lon != null) {
       subNode.append(" · ", el("a", { href: `https://maps.apple.com/?ll=${t.lat},${t.lon}&q=${encodeURIComponent(title)}`, target: "_blank", rel: "noopener", text: "mappa" }));
     }
+    if (t.receipt_path) {
+      subNode.append(" · ", el("a", { href: "#", text: "scontrino", onclick: async (ev) => {
+        ev.preventDefault();
+        const r = await sb.storage.from("receipts").createSignedUrl(t.receipt_path, 120);
+        if (r.error) return msg("addMsg", "Scontrino non disponibile: " + r.error.message);
+        window.open(r.data.signedUrl, "_blank");
+      } }));
+    }
     list.appendChild(el("div", { class: "tx" },
       el("div", { class: "l" }, el("div", { class: "t", text: title }), subNode),
       el("div", { class: "a " + (t.kind !== "normal" ? "" : v < 0 ? "out" : "in"), text: fmtEur(v) }),
@@ -438,6 +452,7 @@ async function deleteTx(t) {
   const q = sb.from("transactions").delete();
   const r = await (t.transfer_id ? q.eq("transfer_id", t.transfer_id) : q.eq("id", t.id));
   if (r.error) return msg("addMsg", "Eliminazione non riuscita: " + r.error.message);
+  if (t.receipt_path) sb.storage.from("receipts").remove([t.receipt_path]);
   await refreshAll();
 }
 function setKind(k) {
@@ -465,6 +480,59 @@ $("geoBtn").onclick = () => {
   );
 };
 
+/* scansione scontrino */
+function jpegBlob(file, maxW, q) {
+  return createImageBitmap(file).then((bmp) => {
+    const k = Math.min(1, maxW / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    return new Promise((res) => c.toBlob(res, "image/jpeg", q));
+  });
+}
+const blobToB64 = (b) => new Promise((res) => { const f = new FileReader(); f.onload = () => res(String(f.result).split(",")[1]); f.readAsDataURL(b); });
+$("scanBtn").onclick = () => {
+  if (!navigator.onLine) return msg("addMsg", "Per leggere lo scontrino serve la connessione. Puoi inserire la spesa a mano.");
+  $("scanFile").value = ""; $("scanFile").click();
+};
+$("scanFile").onchange = async () => {
+  const f = $("scanFile").files[0]; if (!f) return;
+  msg("addMsg", ""); msg("scanOut", ""); $("scanInfo").textContent = "Leggo lo scontrino..."; $("scanBtn").disabled = true;
+  try {
+    const blob = await jpegBlob(f, 1600, 0.8);
+    const image = await blobToB64(blob);
+    const cats = state.categories.filter((c) => c.kind === "expense").map((c) => c.name);
+    const { data, error } = await sb.functions.invoke("read-receipt", { body: { image, categories: cats } });
+    if (error || !data || data.error) {
+      const code = data && data.error;
+      throw new Error(code === "missing_key" ? "la lettura automatica non è ancora attiva" : code === "unreadable" ? "non sono riuscito a leggere la foto, riprova con più luce" : (error && error.message) || "errore");
+    }
+    state.receipt = blob;
+    setKind("expense");
+    if (data.total_cents) amountField.set(data.total_cents);
+    if (data.merchant) $("merchant").value = data.merchant;
+    if (data.date) $("date").value = data.date;
+    const cat = state.categories.find((c) => c.kind === "expense" && c.name === data.category);
+    state.categoryId = cat ? cat.id : null; renderChips();
+    const box = $("scanOut"); box.textContent = "";
+    const warn = [];
+    if (!data.total_cents) warn.push("Totale non trovato: scrivilo tu.");
+    if (data.sum_ok === false) warn.push(`Le righe sommano ${fmtEur(data.items_sum_cents)} ma il totale letto è ${fmtEur(data.total_cents)}: controlla.`);
+    if (data.low_confidence && data.sum_ok !== false) warn.push("Lettura incerta: controlla importo e data.");
+    if (data.notes) warn.push(data.notes);
+    box.appendChild(el("div", { class: "msg " + (warn.length ? "err" : "ok") }, warn.length ? warn.join(" ") : "Letto: controlla importo, data e categoria, poi Salva."));
+    if (data.items && data.items.length) {
+      const d = el("details", { style: "margin-bottom:10px" }, el("summary", { class: "muted", text: `Righe lette (${data.items.length})` }),
+        ...data.items.map((i) => el("div", { class: "muted", text: i.name + " · " + fmtEur(Math.round(i.line_total * 100)) })));
+      box.appendChild(d);
+    }
+    $("scanInfo").textContent = "Scontrino allegato";
+  } catch (e) {
+    state.receipt = null; $("scanInfo").textContent = "";
+    msg("addMsg", "Scansione non riuscita: " + e.message + ". Puoi inserire la spesa a mano.");
+  }
+  $("scanBtn").disabled = false;
+};
+
 $("save").onclick = async () => {
   msg("addMsg", "");
   const cents = amountField.abs();
@@ -478,6 +546,15 @@ $("save").onclick = async () => {
     merchant: $("merchant").value.trim() || null, source: "manual", kind: "normal",
     lat: state.geo ? state.geo.lat : null, lon: state.geo ? state.geo.lon : null, accuracy_m: state.geo ? state.geo.acc : null,
   };
+  let noImg = false;
+  if (state.receipt && navigator.onLine) {
+    const { data: u } = await sb.auth.getUser();
+    const path = u && u.user ? `${u.user.id}/${row.id}.jpg` : null;
+    if (path) {
+      const up = await sb.storage.from("receipts").upload(path, state.receipt, { contentType: "image/jpeg" });
+      if (up.error) noImg = true; else row.receipt_path = path;
+    }
+  } else if (state.receipt) noImg = true;
   const { error } = await sb.from("transactions").insert(row);
   $("save").disabled = false;
   let queued = false;
@@ -486,8 +563,8 @@ $("save").onclick = async () => {
     writeJSON(OUT_KEY, [...outbox(), row]); queued = true; updateBanner();
   }
   localStorage.setItem("wp_lastAccount", row.account_id);
-  amountField.reset(); $("merchant").value = ""; state.categoryId = null; state.geo = null; renderGeo(); renderChips();
-  msg("addMsg", queued ? "Salvato sul telefono: verrà inviato appena c'è rete." : "Salvato.", "ok"); setTimeout(() => msg("addMsg", ""), 2500);
+  state.receipt = null; $("scanInfo").textContent = ""; msg("scanOut", ""); amountField.reset(); $("merchant").value = ""; state.categoryId = null; state.geo = null; renderGeo(); renderChips();
+  msg("addMsg", queued ? "Salvato sul telefono: verrà inviato appena c'è rete." : noImg ? "Salvato, ma la foto dello scontrino non è stata allegata." : "Salvato.", "ok"); setTimeout(() => msg("addMsg", ""), 2500);
   await refreshAll(); amountField.input.focus();
 };
 $("prevM").onclick = () => { state.month = new Date(state.month.getFullYear(), state.month.getMonth() - 1, 1); loadMonth(); };
