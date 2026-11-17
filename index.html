@@ -77,6 +77,11 @@
   .thumb { width: 64px; height: 40px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); flex: none; }
   .thumb.big { width: 100%; height: auto; max-height: 180px; margin-top: 8px; }
   .banner { background: #422006; color: #fde68a; border-radius: 10px; padding: 8px 12px; font-size: 14px; margin-bottom: 12px; }
+  input[type=date] { min-width: 0; max-width: 100%; -webkit-appearance: none; appearance: none; text-align: left; }
+  .card.fold { padding: 0; overflow: hidden; }
+  .fold-head { display: flex; justify-content: space-between; align-items: center; width: 100%; background: transparent; color: var(--text); border-radius: 0; padding: 14px; font-size: 16px; font-weight: 600; text-align: left; }
+  .fold-head .chev { color: var(--muted); font-size: 14px; }
+  .fold-body { padding: 0 14px 14px; }
   .geo { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
   .geo .muted { flex: 1; }
   .geo button { flex: none; }
@@ -166,7 +171,7 @@
 
 <script type="module">
 import { createClient } from "./supabase.js";
-const APP_VERSION = "4";
+const APP_VERSION = "5";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -478,6 +483,16 @@ function typeSelect(value) {
   for (const [k, v] of Object.entries(TYPE_LABEL)) s.appendChild(el("option", { value: k, text: v, selected: k === value }));
   return s;
 }
+function collapsible(key, title, ...body) {
+  state.open = state.open || {};
+  const chev = el("span", { class: "chev", text: state.open[key] ? "▾" : "▸" });
+  const content = el("div", { class: "fold-body" + (state.open[key] ? "" : " hidden") }, ...body);
+  const head = el("button", { type: "button", class: "fold-head", onclick: () => {
+    state.open[key] = !state.open[key];
+    content.classList.toggle("hidden", !state.open[key]); chev.textContent = state.open[key] ? "▾" : "▸";
+  } }, el("span", { text: title }), chev);
+  return el("div", { class: "card fold" }, head, content);
+}
 function field(label, node) { return el("div", { class: "field" }, el("label", { text: label }), node); }
 
 function renderAccounts() {
@@ -575,7 +590,7 @@ function transferCard() {
   const amt = moneyInput({ big: true });
   const date = el("input", { type: "date", value: iso(new Date()) });
   const box = el("div");
-  return el("div", { class: "card" }, el("h2", { text: "Giroconto tra conti" }),
+  return collapsible("transfer", "Giroconto tra conti",
     el("p", { class: "muted", text: "Per spostare soldi tra i tuoi conti (prelievo, pagamento della carta, ricarica). Non conta come spesa né come entrata." }),
     box, field("Da", from), field("A", to), amt.wrap, field("Data", date),
     el("button", { style: "width:100%", text: "Registra giroconto", onclick: async () => {
@@ -601,14 +616,14 @@ function newAccountCard() {
   const date = el("input", { type: "date", value: iso(new Date()) });
   const pic = imagePicker(null);
   const box = el("div");
-  return el("div", { class: "card" }, el("h2", { text: "Nuovo conto o carta" }), box,
+  return collapsible("newacc", "Nuova carta o nuovo conto", box,
     field("Nome", name), field("Tipo", type), field("Immagine della carta (facoltativa, dalla libreria foto)", pic.wrap),
     field("Saldo iniziale (carta di credito con debito: spunta negativo)", bal.wrap), field("Data del saldo iniziale", date),
     el("button", { style: "width:100%", text: "Aggiungi conto", onclick: async () => {
       if (!name.value.trim()) return msg(box, "Inserisci il nome.");
       const { error } = await sb.from("accounts").insert({ name: name.value.trim(), type: type.value, opening_balance_cents: bal.signed(), opening_date: date.value, image_data: pic.value() || null });
       if (error) return msg(box, "Conto non creato: " + error.message);
-      await refreshAll();
+      state.open.newacc = false; await refreshAll();
     } }),
   );
 }
@@ -620,7 +635,7 @@ function renderSettings() {
   root.appendChild(newAccountCard());
   appendCats(root);
   const upd = el("div");
-  root.appendChild(el("div", { class: "card" }, el("h2", { text: "App" }),
+  root.appendChild(collapsible("app", "App e account",
     el("p", { class: "muted", text: "Versione " + APP_VERSION + ". Si aggiorna da sola quando c'è rete e funziona anche offline." }), upd,
     el("div", { class: "row" },
       el("button", { class: "ghost", text: "Cerca aggiornamenti", onclick: async () => {
@@ -633,7 +648,7 @@ function renderSettings() {
 }
 function appendCats(root) {
   for (const [kind, title] of [["expense", "Categorie di spesa"], ["income", "Categorie di entrata"]]) {
-    const card = el("div", { class: "card" }, el("h2", { text: title }));
+    const card = el("div");
     for (const c of state.categories.filter((x) => x.kind === kind)) {
       card.appendChild(el("div", { class: "tx" },
         el("div", { class: "l t", text: c.name }),
@@ -662,7 +677,7 @@ function appendCats(root) {
         if (error) return msg(box, error.code === "23505" ? "Esiste già una categoria con questo nome." : "Non aggiunta: " + error.message);
         await refreshAll();
       } })));
-    root.appendChild(card);
+    root.appendChild(collapsible("cat-" + kind, title, card));
   }
 }
 
