@@ -142,5 +142,8 @@ export function parseReceipt(text, categoryNames = []) {
   const hay = (merchant || "") + " " + lines.slice(0, 5).join(" ");
   for (const [re, name] of CATS) if (re.test(hay) && (!categoryNames.length || categoryNames.includes(name))) { category = name; break; }
   const amounts = [...freq].filter(([c]) => c >= 50 && c < 1000000).sort((a, b) => b[1] - a[1] || b[0] - a[0]).slice(0, 6).map(([c]) => c);
-  return { total_support: support, date_fixed: dateFixed, amounts, total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
+  const upper = String(text).toUpperCase();
+  const electronic = /ELETTRONIC|ELETTR0NIC|BANCOMAT|CARTA ELE|\bPOS\b/.test(upper);
+  const cash = /CONTANT/.test(upper) && !electronic;
+  return { payment: electronic ? "electronic" : cash ? "cash" : null, total_support: support, date_fixed: dateFixed, amounts, total_guess: totalGuess, total_cents: total, date, merchant, items, items_sum_cents: items.length ? sum : null, sum_ok: sumOk, category };
 }

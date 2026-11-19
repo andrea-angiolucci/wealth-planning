@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "28";
+const APP_VERSION = "29";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -559,6 +559,20 @@ $("scanFile").onchange = async () => {
     if (data.total_cents) amountField.set(data.total_cents);
     if (data.merchant) $("merchant").value = data.merchant;
     if (data.date) $("date").value = data.date;
+    // conto dedotto dal tipo di pagamento stampato sullo scontrino (contanti / pagamento elettronico)
+    let accNote = "";
+    const cur = state.accounts.find((x) => x.id === $("account").value);
+    if (data.payment === "cash") {
+      const cash = state.accounts.find((x) => x.type === "cash");
+      if (cash) { $("account").value = cash.id; renderAccImg(); accNote = "Pagato in contanti: conto " + cash.name + "."; }
+    } else if (data.payment === "electronic") {
+      if (!cur || cur.type === "cash") {
+        const last = state.accounts.find((x) => x.id === localStorage.getItem("wp_lastAccount") && x.type !== "cash");
+        const pick = last || state.accounts.find((x) => x.type === "prepaid" || x.type === "card" || x.type === "bank");
+        if (pick) { $("account").value = pick.id; renderAccImg(); }
+      }
+      accNote = "Pagamento elettronico: scegli quale carta hai usato (lo scontrino non lo dice).";
+    }
     const cat = state.categories.find((c) => c.kind === "expense" && c.name === data.category);
     state.categoryId = cat ? cat.id : null; renderChips();
     const box = $("scanOut"); box.textContent = "";
@@ -568,7 +582,7 @@ $("scanFile").onchange = async () => {
     if (data.total_cents && data.total_guess) warn.push("Totale dedotto, non letto con certezza: controllalo.");
         if (data.low_confidence) warn.push("Lettura incerta: controlla importo e data.");
     if (data.notes) warn.push(data.notes);
-    box.appendChild(el("div", { class: "msg " + (warn.length ? "err" : "ok") }, warn.length ? warn.join(" ") : "Letto: controlla importo, data e categoria, poi Salva."));
+    box.appendChild(el("div", { class: "msg " + (warn.length ? "err" : "ok") }, (warn.length ? warn.join(" ") : "Letto: controlla importo, data e categoria, poi Salva.") + (accNote ? " " + accNote : "")));
     if (data.amounts && data.amounts.length) {
       box.appendChild(el("div", { class: "muted", style: "margin:6px 0 4px", text: "Importi letti: tocca quello giusto" }));
       box.appendChild(el("div", { style: "display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px" },
