@@ -79,7 +79,13 @@ export function parseReceipt(text, categoryNames = []) {
       if (sc >= best) { best = sc; total = c; support = occ + n - (occ ? 0 : 0); totalGuess = occ < 2 && n < 2; }
     }
   }
-  if (total == null && all.length) { total = Math.max(...all); totalGuess = true; support = 1; } // ultima risorsa: l'importo piu alto letto (sempre segnalato)
+  if (total == null && all.length) {
+    // ultima risorsa: l'importo piu ripetuto (a parita' il piu alto); non e' un'ipotesi se compare almeno 3 volte (riga, totale, pagamento)
+    let bestC = 0, bestN = 0;
+    for (const [c, n] of freq) if (c > 0 && (n > bestN || (n === bestN && c > bestC))) { bestC = c; bestN = n; }
+    total = bestN >= 2 ? bestC : Math.max(...all);
+    support = bestN >= 2 ? bestN : 1; totalGuess = support < 3;
+  }
   if (total == null && cands.length) { total = cands[cands.length - 1].cents; totalGuess = true; support = 1; }
   // data
   let date = null;
