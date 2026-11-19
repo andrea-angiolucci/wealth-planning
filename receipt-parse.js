@@ -11,6 +11,14 @@ const CATS = [
   [/(CINEMA|TEATRO|MUSEO|LIBRERIA|GIOCATTOL)/i, "Svago"],
 ];
 const numLine = (l) => ((String(l || "").match(/[A-Za-zÀ-ÿ]/g) || []).length <= 3 ? String(l || "") : "");
+// cifre sulle righe successive a una scritta senza importo; si ferma alle righe di testo (es. "DI CUI IVA" ha il suo importo)
+const lookahead = (lines, i) => {
+  const a = numLine(lines[i + 1]);
+  if (!a && lines[i + 1] !== undefined) return [];
+  const out = [...a.matchAll(AMOUNT)];
+  if (!out.length) out.push(...numLine(lines[i + 2]).matchAll(AMOUNT));
+  return out;
+};
 const occurrences = (text, cents) => (String(text).match(new RegExp("(?:^|[^\\d,.])" + (cents / 100).toFixed(2).replace(".", "\\s?[.,]\\s?") + "(?!\\d)", "g")) || []).length;
 export function parseReceipt(text, categoryNames = []) {
   const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -20,7 +28,7 @@ export function parseReceipt(text, categoryNames = []) {
     if (/SUB\s?-?TOTALE|TOTALE\s+IVA|IMPOSTA/i.test(l)) return;
     if (/(TOTALE|DA PAGARE|IMPORTO PAGATO|PAGAMENTO ELETTRONICO|TOTALE EURO)/i.test(l)) {
       const own = [...l.matchAll(AMOUNT)].map((m) => toCents(m[1]));
-      const next = own.length ? [] : [...numLine(lines[i + 1]).matchAll(AMOUNT), ...numLine(lines[i + 2]).matchAll(AMOUNT)].map((m) => toCents(m[1]));
+      const next = own.length ? [] : lookahead(lines, i).map((m) => toCents(m[1]));
       const v = (own.length ? own : next);
       if (v.length) cands.push({ cents: Math.max(...v), strong: /TOTALE\s*(COMPLESSIVO|EURO)?\b|DA PAGARE/i.test(l), i });
     }
@@ -30,7 +38,7 @@ export function parseReceipt(text, categoryNames = []) {
   lines.forEach((l, i) => {
     if (/SUB\s?-?TOTALE|COMPLESS|PLESSIV|T[O0]TAL/i.test(l) && !/IVA|IMPOSTA/i.test(l)) {
       const own = [...l.matchAll(AMOUNT)].map((m) => toCents(m[1]));
-      const next = own.length ? [] : [...numLine(lines[i + 1]).matchAll(AMOUNT), ...numLine(lines[i + 2]).matchAll(AMOUNT)].map((m) => toCents(m[1]));
+      const next = own.length ? [] : lookahead(lines, i).map((m) => toCents(m[1]));
       const v = own.length ? own : next;
       if (v.length) soft.push(Math.max(...v));
     }
