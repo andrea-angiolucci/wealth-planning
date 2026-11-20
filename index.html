@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "31";
+const APP_VERSION = "32";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -935,7 +935,15 @@ function settingsBanks() {
       const until = cn.valid_until ? new Date(cn.valid_until) : null;
       const days = until ? Math.ceil((until - new Date()) / 86400000) : null;
       const label = cn.status === "expired" || (days !== null && days < 0) ? "scaduto: ricollega" : cn.status === "error" ? "errore" : days !== null ? `consenso valido ancora ${days} giorni` : "attivo";
-      body.appendChild(el("div", { class: "tx" }, el("div", { class: "l t", text: cn.aspsp_name }), el("div", { class: "muted", text: label })));
+      body.appendChild(el("div", { class: "tx" }, el("div", { class: "l t", text: cn.aspsp_name }), el("div", { class: "muted", text: label }),
+        el("button", { class: "danger small", text: "Scollega", onclick: async (ev) => {
+          if (!confirm("Scollegare " + cn.aspsp_name + "? I movimenti già importati restano nell'app; il collegamento con la banca viene revocato.")) return;
+          ev.target.disabled = true; msg(status, "Scollego...", "ok");
+          const j = await bankCall("delete", { connection_id: cn.id });
+          if (j.error) { ev.target.disabled = false; return msg(status, bankErr(j)); }
+          msg(status, "Banca scollegata.", "ok");
+          await load();
+        } })));
       for (const a of baccs.filter((x) => x.connection_id === cn.id)) {
         const sel = el("select");
         sel.appendChild(el("option", { value: "", text: "Non abbinato", selected: !a.account_id }));
