@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "29";
+const APP_VERSION = "30";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -897,10 +897,118 @@ function settingsAccounts() {
     onclick: () => { state.newAcc = !state.newAcc; renderSettings(); } });
   return collapsible("accs", `Conti e carte (${state.accounts.length})`, ...rows, addBtn, state.newAcc ? newAccountCard() : null);
 }
+
+/* ---------- BANCHE (Enable Banking, sola lettura) ---------- */
+async function bankCall(action, extra = {}) {
+  let token = SUPABASE_KEY;
+  try { const { data: { session } } = await sb.auth.getSession(); if (session) token = session.access_token; } catch (e) {}
+  let r, j = {};
+  try {
+    r = await fetch(SUPABASE_URL + "/functions/v1/bank", { method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: "Bearer " + token },
+      body: JSON.stringify({ action, ...extra }) });
+    try { j = await r.json(); } catch (e) {}
+    if (!r.ok && !j.error) j.error = "http_" + r.status;
+  } catch (e) { j = { error: "rete" }; }
+  return j;
+}
+function bankErr(j) {
+  if (j.error === "rete") return "Nessuna connessione: riprova quando sei online.";
+  if (j.error === "unauthorized") return "Sessione scaduta: esci e rientra.";
+  if (j.error === "eb") return "La banca o Enable Banking ha risposto con un errore (" + (j.status || "?") + "): " + String(j.detail || "").slice(0, 160);
+  return "Operazione non riuscita (" + (j.error || "errore") + (j.detail ? ": " + String(j.detail).slice(0, 120) : "") + ").";
+}
+function itDateTime(s) { return s ? new Date(s).toLocaleString("it-IT", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "mai"; }
+function settingsBanks() {
+  const body = el("div", {}, el("p", { class: "muted", text: "Carico..." }));
+  const status = el("div");
+  const load = async () => {
+    const [c, b] = await Promise.all([
+      sb.from("bank_connections").select("id,aspsp_name,status,valid_until,created_at").neq("status", "pending").order("created_at"),
+      sb.from("bank_accounts").select("id,connection_id,label,last4,account_id,bank_balance_cents,balance_at,last_sync"),
+    ]);
+    body.textContent = "";
+    if (c.error || b.error) { body.appendChild(el("p", { class: "muted", text: "Non riesco a leggere le banche (offline?)." })); return; }
+    const conns = c.data || [], baccs = b.data || [];
+    if (!conns.length) body.appendChild(el("p", { class: "muted", text: "Nessuna banca collegata." }));
+    for (const cn of conns) {
+      const until = cn.valid_until ? new Date(cn.valid_until) : null;
+      const days = until ? Math.ceil((until - new Date()) / 86400000) : null;
+      const label = cn.status === "expired" || (days !== null && days < 0) ? "scaduto: ricollega" : cn.status === "error" ? "errore" : days !== null ? `consenso valido ancora ${days} giorni` : "attivo";
+      body.appendChild(el("div", { class: "tx" }, el("div", { class: "l t", text: cn.aspsp_name }), el("div", { class: "muted", text: label })));
+      for (const a of baccs.filter((x) => x.connection_id === cn.id)) {
+        const sel = el("select");
+        sel.appendChild(el("option", { value: "", text: "Non abbinato", selected: !a.account_id }));
+        for (const ac of state.accounts) sel.appendChild(el("option", { value: ac.id, text: ac.name, selected: ac.id === a.account_id }));
+        sel.onchange = async () => {
+          const { error } = await sb.from("bank_accounts").update({ account_id: sel.value || null }).eq("id", a.id);
+          msg(status, error ? "Non salvato: " + error.message : sel.value ? "Abbinato. Premi Sincronizza per importare i movimenti." : "Abbinamento tolto.", error ? "err" : "ok");
+        };
+        const app = state.accounts.find((x) => x.id === a.account_id);
+        const bal = a.bank_balance_cents != null ? "Saldo banca " + fmtEur(a.bank_balance_cents) + " (" + itDateTime(a.balance_at) + ")" : "Saldo banca non ancora letto";
+        const cmp = a.bank_balance_cents != null && app ? " · saldo app " + fmtEur(app.balance) : "";
+        body.appendChild(el("div", { class: "field" },
+          el("label", { text: (a.label || "Conto") + (a.last4 ? " ····" + a.last4 : "") }), sel,
+          el("div", { class: "muted", text: bal + cmp + " · ultimo aggiornamento: " + itDateTime(a.last_sync) })));
+      }
+    }
+    const syncBtn = el("button", { style: "width:100%;margin-top:10px", text: "Sincronizza ora", disabled: !conns.length, onclick: async () => {
+      syncBtn.disabled = true; msg(status, "Sincronizzo con la banca...", "ok");
+      const j = await bankCall("sync");
+      syncBtn.disabled = false;
+      if (j.error) return msg(status, bankErr(j));
+      const rs = j.results || [];
+      const added = rs.reduce((t, x) => t + (x.added || 0), 0);
+      const probs = rs.filter((x) => x.error || x.unmapped);
+      let t = added + " nuovi movimenti importati.";
+      if (rs.some((x) => x.unmapped)) t += " Abbina il conto bancario a un conto dell'app per importare i movimenti.";
+      for (const x of rs.filter((y) => y.error)) t += " " + (x.label || x.bank) + ": " + (x.error === "expired" ? "consenso scaduto, ricollega la banca." : x.error);
+      msg(status, t, probs.length ? "err" : "ok");
+      await refreshAll();
+    } });
+    const pick = el("div");
+    const linkBtn = el("button", { class: "ghost", style: "width:100%;margin-top:10px", text: "Collega una banca", onclick: async () => {
+      linkBtn.disabled = true; msg(status, "Cerco le banche...", "ok");
+      const j = await bankCall("banks");
+      linkBtn.disabled = false;
+      if (j.error) return msg(status, bankErr(j));
+      msg(status, "");
+      const sel = el("select");
+      for (const x of (j.banks || []).sort((p, q) => p.name.localeCompare(q.name))) sel.appendChild(el("option", { value: x.name, text: x.name }));
+      pick.textContent = "";
+      pick.append(field("Banca", sel), el("button", { style: "width:100%", text: "Vai alla banca", onclick: async () => {
+        msg(status, "Preparo il collegamento...", "ok");
+        const r = await bankCall("start", { bank: sel.value });
+        if (r.error || !r.url) return msg(status, bankErr(r));
+        location.href = r.url;
+      } }));
+    } });
+    body.append(syncBtn, linkBtn, pick);
+  };
+  load();
+  return collapsible("banks", "Banche", body, status);
+}
+function bankReturnNotice(text, ok) {
+  const box = el("div", { class: "card", style: "position:fixed;left:12px;right:12px;top:12px;z-index:99;box-shadow:0 4px 20px rgba(0,0,0,.3)" },
+    el("div", { class: "msg " + (ok ? "ok" : "err"), text }),
+    el("button", { style: "width:100%;margin-top:8px", text: "Ok", onclick: () => box.remove() }));
+  document.body.appendChild(box);
+}
+async function handleBankReturn() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("state") || !(q.has("code") || q.has("error"))) return null;
+  const code = q.get("code"), st = q.get("state"), err = q.get("error");
+  history.replaceState(null, "", location.pathname);
+  if (!code) { bankReturnNotice("Collegamento annullato o non riuscito (" + (q.get("error_description") || err) + ").", false); return false; }
+  const j = await bankCall("callback", { code, state: st });
+  if (j.ok) { state.open.banks = true; bankReturnNotice("Banca collegata (" + j.accounts + " conti). Ora vai in Impostazioni, Banche, abbina ogni conto a un conto dell'app e premi Sincronizza.", true); return true; }
+  bankReturnNotice("Collegamento non completato: " + bankErr(j), false); return false;
+}
 function renderSettings() {
   const root = $("viewSettings"); root.textContent = "";
   root.appendChild(el("div", { class: "head" }, el("h2", { text: "Impostazioni", style: "margin:0" }), el("button", { class: "ghost small", text: "Chiudi", onclick: () => setTab("moves") })));
   root.appendChild(settingsAccounts());
+  root.appendChild(settingsBanks());
   const arch = el("div"); root.appendChild(arch);
   sb.from("accounts").select("id,name,type,image_data").eq("archived", true).then(({ data }) => {
     if (!data || !data.length || state.tab !== "settings") return;
@@ -1130,6 +1238,7 @@ function dueForm() {
 /* ---------- AVVIO ---------- */
 function hasStoredSession() { return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k)); }
 async function boot() {
+  const bankReturned = await handleBankReturn();
   let session = null;
   try { ({ data: { session } } = await sb.auth.getSession()); } catch (e) {}
   const offlineOk = !session && !navigator.onLine && hasStoredSession() && readJSON("wp_cache", null);
@@ -1140,7 +1249,7 @@ async function boot() {
   $("date").value = iso(new Date());
   setKind("expense"); renderGeo();
   if (await loadRefs()) { renderSelects(); renderChips(); renderPatrimonioTop(); }
-  setTab("moves");
+  setTab(bankReturned ? "settings" : "moves");
   loadDue();
 }
 boot();
