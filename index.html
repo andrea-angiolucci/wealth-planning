@@ -200,7 +200,7 @@
 import { createClient } from "./supabase.js";
 import { parseReceipt } from "./receipt-parse.js";
 import { decodeBytes, parseCsv, detectMapping, buildRows, hashRow, guessCategory } from "./csv-import.js";
-const APP_VERSION = "30";
+const APP_VERSION = "31";
 
 const SUPABASE_URL = "https://rdlyhcwjvatrcmtjoucv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_lYFIA17BKVXTJXk4Nc0kNA_T9AjAdGI"; // chiave pubblica: la protezione e' la RLS
@@ -973,15 +973,30 @@ function settingsBanks() {
       linkBtn.disabled = false;
       if (j.error) return msg(status, bankErr(j));
       msg(status, "");
-      const sel = el("select");
-      for (const x of (j.banks || []).sort((p, q) => p.name.localeCompare(q.name))) sel.appendChild(el("option", { value: x.name, text: x.name }));
-      pick.textContent = "";
-      pick.append(field("Banca", sel), el("button", { style: "width:100%", text: "Vai alla banca", onclick: async () => {
+      const names = (j.banks || []).map((x) => x.name).sort((p, q) => p.localeCompare(q, "it"));
+      let chosen = "";
+      const norm = (t) => String(t).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const search = el("input", { type: "search", placeholder: "Scrivi il nome della banca", autocomplete: "off", autocapitalize: "off" });
+      const list = el("div", { style: "max-height:260px;overflow-y:auto;margin:8px 0" });
+      const info = el("div", { class: "muted", style: "margin-bottom:8px" });
+      const go = el("button", { style: "width:100%", text: "Vai alla banca", disabled: true, onclick: async () => {
         msg(status, "Preparo il collegamento...", "ok");
-        const r = await bankCall("start", { bank: sel.value });
+        const r = await bankCall("start", { bank: chosen });
         if (r.error || !r.url) return msg(status, bankErr(r));
         location.href = r.url;
-      } }));
+      } });
+      const draw = () => {
+        const q = norm(search.value.trim());
+        const hits = names.filter((n) => norm(n).includes(q)).slice(0, 60);
+        list.textContent = "";
+        for (const n of hits) list.appendChild(el("button", { type: "button", class: "ghost", style: "width:100%;text-align:left;margin-bottom:4px", text: n,
+          onclick: () => { chosen = n; go.disabled = false; info.textContent = "Scelta: " + n; go.textContent = "Vai a " + n; } }));
+        if (!hits.length) list.appendChild(el("p", { class: "muted", text: "Nessuna banca trovata." }));
+      };
+      search.addEventListener("input", draw);
+      pick.textContent = "";
+      pick.append(field("Banca", search), list, info, go);
+      draw(); search.focus();
     } });
     body.append(syncBtn, linkBtn, pick);
   };
